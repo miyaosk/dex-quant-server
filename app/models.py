@@ -198,6 +198,106 @@ class SignalQuery(BaseModel):
 
 
 # ═══════════════════════════════════════════
+#  交易记录
+# ═══════════════════════════════════════════
+
+
+class TradeCreate(BaseModel):
+    """提交交易记录。"""
+    trade_id: str = ""
+    signal_id: Optional[str] = None
+    strategy_id: str
+    exchange: str
+    symbol: str
+    side: str
+    quantity: float
+    price: float
+    fee: float = 0
+    fee_asset: str = "USDT"
+    order_type: str = "market"
+    leverage: int = 1
+    margin_mode: str = "isolated"
+    status: str = "filled"
+    exchange_order_id: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class TradeDetail(BaseModel):
+    """交易记录详情。"""
+    trade_id: str
+    signal_id: Optional[str] = None
+    strategy_id: str
+    exchange: str
+    symbol: str
+    side: str
+    quantity: float
+    price: float
+    fee: float = 0
+    fee_asset: str = "USDT"
+    order_type: str = "market"
+    leverage: int = 1
+    margin_mode: str = "isolated"
+    status: str = "filled"
+    exchange_order_id: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class TradeQuery(BaseModel):
+    """交易查询参数。"""
+    strategy_id: Optional[str] = None
+    exchange: Optional[str] = None
+    symbol: Optional[str] = None
+    limit: int = 200
+
+
+# ═══════════════════════════════════════════
+#  持仓
+# ═══════════════════════════════════════════
+
+
+class PositionDetail(BaseModel):
+    """持仓详情。"""
+    position_id: str
+    strategy_id: str
+    exchange: str
+    symbol: str
+    side: str
+    quantity: float = 0
+    avg_entry_price: float = 0
+    leverage: int = 1
+    margin_mode: str = "isolated"
+    realized_pnl: float = 0
+    total_fee: float = 0
+    status: str = "open"
+    opened_at: Optional[str] = None
+    closed_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class PositionQuery(BaseModel):
+    """持仓查询参数。"""
+    strategy_id: Optional[str] = None
+    exchange: Optional[str] = None
+
+
+# ═══════════════════════════════════════════
+#  PnL
+# ═══════════════════════════════════════════
+
+
+class PnLSummary(BaseModel):
+    """策略 PnL 汇总。"""
+    strategy_id: str
+    total_trades: int = 0
+    total_buy_value: float = 0
+    total_sell_value: float = 0
+    total_fee: float = 0
+    net_value: float = 0
+    realized_pnl: float = 0
+
+
+# ═══════════════════════════════════════════
 #  策略列表
 # ═══════════════════════════════════════════
 

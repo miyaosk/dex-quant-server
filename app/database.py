@@ -86,6 +86,56 @@ _CREATE_TABLES_SQL = [
         INDEX idx_created (created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='交易信号表'
     """,
+    """
+    CREATE TABLE IF NOT EXISTS dex_trades (
+        trade_id VARCHAR(64) PRIMARY KEY COMMENT '交易唯一ID',
+        signal_id VARCHAR(64) COMMENT '触发该交易的信号ID(可为空,手动交易时)',
+        strategy_id VARCHAR(64) NOT NULL COMMENT '关联策略ID',
+        exchange VARCHAR(32) NOT NULL COMMENT '交易平台: binance/hyperliquid',
+        symbol VARCHAR(64) NOT NULL COMMENT '交易对',
+        side VARCHAR(16) NOT NULL COMMENT '方向: buy/sell',
+        quantity DOUBLE NOT NULL COMMENT '数量',
+        price DOUBLE NOT NULL COMMENT '成交价格',
+        fee DOUBLE DEFAULT 0 COMMENT '手续费',
+        fee_asset VARCHAR(16) DEFAULT 'USDT' COMMENT '手续费币种',
+        order_type VARCHAR(16) DEFAULT 'market' COMMENT '订单类型: market/limit',
+        leverage INT DEFAULT 1 COMMENT '杠杆倍数',
+        margin_mode VARCHAR(16) DEFAULT 'isolated' COMMENT '保证金模式: isolated/cross',
+        status VARCHAR(16) DEFAULT 'filled' COMMENT '状态: pending/filled/cancelled/failed',
+        exchange_order_id VARCHAR(128) COMMENT '交易所返回的订单ID',
+        notes TEXT COMMENT '备注',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '成交时间',
+        INDEX idx_strategy (strategy_id),
+        INDEX idx_signal (signal_id),
+        INDEX idx_exchange (exchange),
+        INDEX idx_symbol (symbol),
+        INDEX idx_side (side),
+        INDEX idx_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='实盘交易记录表'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS dex_positions (
+        position_id VARCHAR(64) PRIMARY KEY COMMENT '持仓唯一ID',
+        strategy_id VARCHAR(64) NOT NULL COMMENT '关联策略ID',
+        exchange VARCHAR(32) NOT NULL COMMENT '交易平台',
+        symbol VARCHAR(64) NOT NULL COMMENT '交易对',
+        side VARCHAR(16) NOT NULL COMMENT '持仓方向: long/short',
+        quantity DOUBLE NOT NULL DEFAULT 0 COMMENT '当前持仓数量',
+        avg_entry_price DOUBLE NOT NULL DEFAULT 0 COMMENT '平均入场价',
+        leverage INT DEFAULT 1 COMMENT '杠杆倍数',
+        margin_mode VARCHAR(16) DEFAULT 'isolated' COMMENT '保证金模式',
+        realized_pnl DOUBLE DEFAULT 0 COMMENT '已实现盈亏',
+        total_fee DOUBLE DEFAULT 0 COMMENT '累计手续费',
+        status VARCHAR(16) DEFAULT 'open' COMMENT '状态: open/closed',
+        opened_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '开仓时间',
+        closed_at DATETIME COMMENT '平仓时间',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
+        INDEX idx_strategy (strategy_id),
+        INDEX idx_exchange_symbol (exchange, symbol),
+        INDEX idx_status (status),
+        INDEX idx_opened (opened_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='持仓跟踪表'
+    """,
 ]
 
 
@@ -257,6 +307,141 @@ async def get_signal(signal_id: str) -> Optional[dict]:
         mysql.select_where, "dex_signals", {"signal_id": signal_id}, True
     )
     return rows[0] if rows else None
+
+
+# ═══════════════════════════════════════════
+#  交易记录
+# ═══════════════════════════════════════════
+
+
+async def save_trade(trade: dict) -> None:
+    """保存一条交易记录。"""
+    await asyncio.to_thread(mysql.upsert, trade, "dex_trades")
+
+
+async def list_trades(
+    strategy_id: str = None,
+    exchange: str = None,
+    symbol: str = None,
+    limit: int = 200,
+) -> list[dict]:
+    """查询交易记录。"""
+    conditions = []
+    params = []
+    if strategy_id:
+        conditions.append("strategy_id = %s")
+        params.append(strategy_id)
+    if exchange:
+        conditions.append("exchange = %s")
+        params.append(exchange)
+    if symbol:
+        conditions.append("symbol = %s")
+        params.append(symbol)
+
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    sql = f"SELECT * FROM dex_trades WHERE {where_clause} ORDER BY created_at DESC LIMIT %s"
+    params.append(limit)
+
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, tuple(params), True)
+    return rows
+
+
+async def get_trade(trade_id: str) -> Optional[dict]:
+    """按 ID 获取单条交易。"""
+    rows = await asyncio.to_thread(
+        mysql.select_where, "dex_trades", {"trade_id": trade_id}, True
+    )
+    return rows[0] if rows else None
+
+
+# ═══════════════════════════════════════════
+#  持仓
+# ═══════════════════════════════════════════
+
+
+async def save_position(position: dict) -> None:
+    """保存/更新持仓。"""
+    await asyncio.to_thread(mysql.upsert, position, "dex_positions")
+
+
+async def get_open_positions(
+    strategy_id: str = None,
+    exchange: str = None,
+) -> list[dict]:
+    """查询当前打开的持仓。"""
+    conditions = ["status = 'open'"]
+    params = []
+    if strategy_id:
+        conditions.append("strategy_id = %s")
+        params.append(strategy_id)
+    if exchange:
+        conditions.append("exchange = %s")
+        params.append(exchange)
+
+    where_clause = " AND ".join(conditions)
+    sql = f"SELECT * FROM dex_positions WHERE {where_clause} ORDER BY opened_at DESC"
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, tuple(params) if params else None, True)
+    return rows
+
+
+async def get_position(position_id: str) -> Optional[dict]:
+    """按 ID 获取单条持仓。"""
+    rows = await asyncio.to_thread(
+        mysql.select_where, "dex_positions", {"position_id": position_id}, True
+    )
+    return rows[0] if rows else None
+
+
+async def get_position_by_key(
+    strategy_id: str, exchange: str, symbol: str, side: str
+) -> Optional[dict]:
+    """按策略+交易所+交易对+方向查找 open 持仓。"""
+    sql = (
+        "SELECT * FROM dex_positions "
+        "WHERE strategy_id = %s AND exchange = %s AND symbol = %s "
+        "AND side = %s AND status = 'open' LIMIT 1"
+    )
+    rows = await asyncio.to_thread(
+        mysql.execute_sql, sql, (strategy_id, exchange, symbol, side), True
+    )
+    return rows[0] if rows else None
+
+
+async def calc_strategy_pnl(strategy_id: str) -> dict:
+    """计算某个策略的 PnL 汇总。"""
+    sql = """
+        SELECT
+            COUNT(*) AS total_trades,
+            SUM(CASE WHEN side = 'buy' THEN quantity * price ELSE 0 END) AS total_buy_value,
+            SUM(CASE WHEN side = 'sell' THEN quantity * price ELSE 0 END) AS total_sell_value,
+            SUM(fee) AS total_fee,
+            SUM(CASE WHEN side = 'sell' THEN quantity * price ELSE -quantity * price END) AS net_value
+        FROM dex_trades
+        WHERE strategy_id = %s AND status = 'filled'
+    """
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, (strategy_id,), True)
+    row = rows[0] if rows else {}
+
+    # 加上持仓的已实现 PnL
+    pos_sql = """
+        SELECT
+            COALESCE(SUM(realized_pnl), 0) AS total_realized_pnl,
+            COALESCE(SUM(total_fee), 0) AS positions_total_fee
+        FROM dex_positions
+        WHERE strategy_id = %s
+    """
+    pos_rows = await asyncio.to_thread(mysql.execute_sql, pos_sql, (strategy_id,), True)
+    pos = pos_rows[0] if pos_rows else {}
+
+    return {
+        "strategy_id": strategy_id,
+        "total_trades": row.get("total_trades", 0) or 0,
+        "total_buy_value": float(row.get("total_buy_value", 0) or 0),
+        "total_sell_value": float(row.get("total_sell_value", 0) or 0),
+        "total_fee": float(row.get("total_fee", 0) or 0),
+        "net_value": float(row.get("net_value", 0) or 0),
+        "realized_pnl": float(pos.get("total_realized_pnl", 0) or 0),
+    }
 
 
 # ═══════════════════════════════════════════
