@@ -29,7 +29,7 @@ deploy:
   tags:
     - dex-qa
   variables:
-    MODULE: 'build'
+    MODULE: 'dexquantserver'
     TARGET: "dex-qa"
   extends:
     - .base-rules
