@@ -5,7 +5,7 @@
 from fastapi import APIRouter, HTTPException
 from loguru import logger
 
-from app.config import settings
+from app import config
 from app.models import KlineRequest
 from app.services.data_service import DataService
 
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/data", tags=["数据"])
 
 
 def _get_data_service() -> DataService:
-    return DataService(proxy=settings.PROXY_URL)
+    return DataService(proxy=config.PROXY_URL)
 
 
 @router.post("/klines")

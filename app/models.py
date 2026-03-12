@@ -166,6 +166,42 @@ class KlineRequest(BaseModel):
 # ═══════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════
+#  信号
+# ═══════════════════════════════════════════
+
+
+class SignalEvent(BaseModel):
+    """交易信号事件。"""
+    signal_id: str
+    strategy_id: str
+    symbol: str
+    timeframe: str
+    signal_type: str
+    strength: float = 0.5
+    price_at_signal: float
+    stop_loss_price: Optional[float] = None
+    take_profit_price: Optional[float] = None
+    triggered_by: list[str] = Field(default_factory=list)
+    feature_snapshot: dict = Field(default_factory=dict)
+    confidence: Optional[float] = None
+    ttl_seconds: Optional[int] = None
+    metadata: dict = Field(default_factory=dict)
+    created_at: Optional[str] = None
+
+
+class SignalQuery(BaseModel):
+    """信号查询参数。"""
+    strategy_id: Optional[str] = None
+    symbol: Optional[str] = None
+    limit: int = 100
+
+
+# ═══════════════════════════════════════════
+#  策略列表
+# ═══════════════════════════════════════════
+
+
 class StrategyListItem(BaseModel):
     """策略列表中的摘要条目。"""
     strategy_id: str

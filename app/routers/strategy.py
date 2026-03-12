@@ -37,15 +37,20 @@ async def list_all_strategies():
     rows = await database.list_strategies()
     result = []
     for r in rows:
+        spec = {}
+        try:
+            spec = json.loads(r["spec_json"]) if r.get("spec_json") else {}
+        except (json.JSONDecodeError, TypeError):
+            pass
         result.append(StrategyListItem(
             strategy_id=r["strategy_id"],
             name=r["name"],
             version=r["version"],
-            universe=[],
-            timeframe="",
+            universe=spec.get("universe", []),
+            timeframe=spec.get("timeframe", ""),
             lifecycle_state=r["lifecycle_state"],
-            created_at=r["created_at"],
-            updated_at=r["updated_at"],
+            created_at=str(r["created_at"]),
+            updated_at=str(r["updated_at"]),
         ))
     return result
 

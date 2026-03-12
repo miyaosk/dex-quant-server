@@ -9,7 +9,7 @@ import json
 from fastapi import APIRouter, HTTPException
 from loguru import logger
 
-from app.config import settings
+from app import config
 from app.models import BacktestRequest, BacktestResponse
 from app.services.backtest_service import BacktestService
 from app.services.data_service import DataService
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/backtest", tags=["回测"])
 
 def _build_backtest_service() -> tuple[BacktestService, DataService]:
     """构建 BacktestService 及其依赖的 DataService。"""
-    ds = DataService(proxy=settings.PROXY_URL)
+    ds = DataService(proxy=config.PROXY_URL)
     return BacktestService(data_service=ds), ds
 
 
@@ -84,7 +84,7 @@ async def get_backtest(backtest_id: str):
         trades=json.loads(row["trades_json"]) if row["trades_json"] else [],
         equity_curve=json.loads(row["equity_json"]) if row["equity_json"] else [],
         error=row["error"],
-        created_at=row["created_at"],
+        created_at=str(row["created_at"]),
         elapsed_ms=row["elapsed_ms"],
     )
 

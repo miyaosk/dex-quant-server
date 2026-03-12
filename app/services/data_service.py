@@ -1,5 +1,5 @@
 """
-数据服务层 — 在 DataClient 之上封装 SQLite 缓存
+数据服务层 — 在 DataClient 之上封装 MySQL 缓存
 
 缓存策略:
   - crypto 数据缓存有效期 1 小时
@@ -31,7 +31,7 @@ _CACHE_TTL = {
 
 
 class DataService:
-    """带 SQLite 缓存的数据获取服务。"""
+    """带 MySQL 缓存的数据获取服务。"""
 
     def __init__(self, proxy: str = None):
         self.client = DataClient(proxy=proxy)
@@ -56,13 +56,11 @@ class DataService:
         """
         cache_key = f"{market}:{symbol}:{interval}:{start_date}:{end_date}"
 
-        # 尝试读取缓存
         cached = await self._get_fresh_cache(cache_key, market)
         if cached is not None:
             logger.debug(f"缓存命中: {cache_key}")
             return cached
 
-        # 调用 API 获取数据
         logger.info(f"从 API 获取: {cache_key}")
         df = self._fetch_from_api(symbol, interval, start_date, end_date, market)
 
@@ -120,18 +118,15 @@ class DataService:
     ) -> pd.DataFrame | None:
         """从数据库读取缓存，检查是否过期。"""
         try:
-            async with database.get_db() as db:
-                cursor = await db.execute(
-                    "SELECT data_json, fetched_at FROM kline_cache WHERE cache_key = ?",
-                    (cache_key,),
-                )
-                row = await cursor.fetchone()
-
+            row = await database.get_cached_klines(cache_key)
             if row is None:
                 return None
 
-            # 检查是否过期
-            fetched_at = datetime.fromisoformat(row["fetched_at"]).replace(tzinfo=timezone.utc)
+            fetched_at = row["fetched_at"]
+            if isinstance(fetched_at, datetime):
+                fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+            else:
+                fetched_at = datetime.fromisoformat(str(fetched_at)).replace(tzinfo=timezone.utc)
             age_seconds = (datetime.now(timezone.utc) - fetched_at).total_seconds()
             ttl = _CACHE_TTL.get(market, 3600)
 

@@ -10,14 +10,13 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from loguru import logger
 
 from app import database
-from app.config import settings
-from app.routers import data, strategy, backtest
+from app import config
+from app.routers import data, strategy, backtest, signal
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init_db()
-    logger.info("数据库初始化完成")
     yield
     logger.info("服务关闭")
 
@@ -57,9 +56,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(data.router, prefix=settings.API_PREFIX)
-app.include_router(strategy.router, prefix=settings.API_PREFIX)
-app.include_router(backtest.router, prefix=settings.API_PREFIX)
+app.include_router(data.router, prefix=config.API_PREFIX)
+app.include_router(strategy.router, prefix=config.API_PREFIX)
+app.include_router(backtest.router, prefix=config.API_PREFIX)
+app.include_router(signal.router, prefix=config.API_PREFIX)
 
 
 @app.get("/health")

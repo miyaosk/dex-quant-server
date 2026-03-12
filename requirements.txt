@@ -5,4 +5,6 @@ loguru>=0.7
 numpy>=1.24
 pandas>=2.0
 yfinance>=0.2
-aiosqlite>=0.20
+pymysql>=1.1
+DBUtils>=3.1
+retry>=0.9

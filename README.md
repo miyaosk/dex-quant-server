@@ -5,7 +5,7 @@
 ## 技术栈
 
 - **FastAPI** — 高性能异步 Web 框架
-- **SQLite (aiosqlite)** — 轻量持久化（策略、回测结果、K 线缓存）
+- **MySQL (aiomysql)** — 异步连接池持久化（策略、回测结果、K 线缓存）
 - **numpy / pandas** — 数值计算与数据处理
 - **httpx** — 调用 Binance / CoinGecko 等公开 API
 
@@ -38,15 +38,26 @@ uvicorn app.main:app --reload
 
 ```bash
 docker build -t dex-quant-server .
-docker run -p 8000:8000 -e PROXY_URL=http://host:port dex-quant-server
+docker run -p 8000:8000 \
+  -e MYSQL_HOST=your-mysql-host \
+  -e MYSQL_PORT=3306 \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=your-password \
+  -e MYSQL_DB=dex_quant \
+  dex-quant-server
 ```
 
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `MYSQL_HOST` | `127.0.0.1` | MySQL 主机地址 |
+| `MYSQL_PORT` | `3306` | MySQL 端口 |
+| `MYSQL_USER` | `root` | MySQL 用户名 |
+| `MYSQL_PASSWORD` | *(空)* | MySQL 密码 |
+| `MYSQL_DB` | `dex_quant` | MySQL 数据库名 |
+| `MYSQL_POOL_SIZE` | `10` | 连接池最大连接数 |
 | `PROXY_URL` | *(空)* | HTTP 代理地址，用于访问 Binance API |
-| `DATA_DIR` | `data` | 数据存储目录 |
 | `API_PREFIX` | `/api/v1` | API 路由前缀 |
 | `DEFAULT_FEE_RATE` | `0.0005` | 默认手续费率 |
 | `DEFAULT_SLIPPAGE_BPS` | `2.0` | 默认滑点（基点） |
@@ -80,7 +91,7 @@ docker run -p 8000:8000 -e PROXY_URL=http://host:port dex-quant-server
 │  └───────┬───────┘  │
 │          ▼          │
 │  ┌───────────────┐  │
-│  │   SQLite DB   │  │  持久化（策略 / 回测结果 / K 线缓存）
+│  │   MySQL DB    │  │  持久化（策略 / 回测结果 / K 线缓存）
 │  └───────────────┘  │
 └─────────────────────┘
 ```
