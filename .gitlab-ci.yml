@@ -1,0 +1,60 @@
+.base-rules:
+  rules:
+    - when: manual
+      allow_failure: true
+
+stages:
+  - build
+  - deploy
+
+variables:
+  ENV:
+    value: "qa"
+  TAG:
+    value: "${CI_COMMIT_SHA}"
+  HUB: 533267002049.dkr.ecr.ap-southeast-1.amazonaws.com/key
+
+build:
+  stage: build
+  tags:
+    - dex-qa
+  variables:
+    MODULE: 'dexquantserver'
+  extends:
+    - .base-rules
+    - .build_image
+
+deploy:
+  stage: deploy
+  tags:
+    - dex-qa
+  variables:
+    MODULE: 'build'
+    TARGET: "dex-qa"
+  extends:
+    - .base-rules
+    - .deploy_eks
+  needs:
+    - job: build
+      artifacts: true
+
+.build_image:
+  variables:
+    AWS_DEFAULT_REGION: ap-southeast-1
+    CI_REGISTRY_IMAGE: ${HUB}
+  image: gcr.io/kaniko-project/executor:debug
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"credsStore\":\"ecr-login\"}" > /kaniko/.docker/config.json
+    - >-
+      /kaniko/executor
+      --context "${CI_PROJECT_DIR}/"
+      --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+      --destination "${CI_REGISTRY_IMAGE}:${MODULE}-${TAG}"
+
+.deploy_eks:
+  image:
+    name: alpine/k8s:1.30.3
+    #entrypoint: [""]
+  script:
+    - kubectl -n ${TARGET} set image deployment/${MODULE} ${MODULE}=${HUB}:${MODULE}-${TAG}
