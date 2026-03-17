@@ -19,3 +19,5 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel Cython==3.1.1
 RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 8000
+
+CMD ["sh", "run.sh"]
