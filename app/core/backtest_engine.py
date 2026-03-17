@@ -1,20 +1,20 @@
 """
-回测引擎 — 永续合约专项 + 字符串规则求值
+信号驱动回测引擎 — 永续合约专项
 
-核心能力:
-  - 从 StrategySpec 的 features 配置自动计算指标
-  - 解析 entry_rules / exit_rules 字符串表达式并动态求值
-  - 多空双向持仓、逐仓/全仓保证金、杠杆 1x-125x
+核心变化：不再解析规则字符串，改为接收外部信号列表驱动交易。
+Skill 端运行策略脚本生成信号 → 信号发送到 Server → 本引擎回放信号。
+
+能力：
+  - 多空双向持仓、逐仓保证金、杠杆 1x-125x
   - 资金费率 8h 结算、强平、止损/止盈、滑点、手续费
   - 输出标准化 metrics + trades + equity_curve
 
-入口函数:
-  run_backtest(df, spec, config) -> dict
+入口函数：
+  run_backtest(df, signals, config) -> dict
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -22,11 +22,9 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from app.core.indicators import Indicators
-
 
 # ═══════════════════════════════════════════
-#  数据结构（内部使用）
+#  数据结构
 # ═══════════════════════════════════════════
 
 
@@ -87,6 +85,7 @@ class _TradeRecord:
     slippage: float
     funding_fee: float
     realized_pnl: float
+    reason: str = ""
 
 
 @dataclass
@@ -134,7 +133,7 @@ class _Account:
 
 
 class BacktestEngine:
-    """永续合约回测引擎。保留完整的交易执行能力。"""
+    """永续合约回测引擎。"""
 
     def __init__(
         self,
@@ -156,31 +155,29 @@ class BacktestEngine:
         self.enable_funding = enable_funding
         self.enable_liquidation = enable_liquidation
         self.maintenance_margin_rate = maintenance_margin_rate
-
         self.account = _Account(initial_capital=initial_capital)
 
-    # ── 交易操作 ──
-
     def open_long(self, symbol: str, qty: float, price: float,
-                  mark_price: float, dt: str, leverage: int = None):
-        self._open_position(symbol, "long", qty, price, mark_price, dt, leverage)
+                  mark_price: float, dt: str, leverage: int = None,
+                  reason: str = ""):
+        self._open_position(symbol, "long", qty, price, mark_price, dt, leverage, reason)
 
     def open_short(self, symbol: str, qty: float, price: float,
-                   mark_price: float, dt: str, leverage: int = None):
-        self._open_position(symbol, "short", qty, price, mark_price, dt, leverage)
+                   mark_price: float, dt: str, leverage: int = None,
+                   reason: str = ""):
+        self._open_position(symbol, "short", qty, price, mark_price, dt, leverage, reason)
 
     def close_long(self, symbol: str, qty: float, price: float,
-                   mark_price: float, dt: str):
-        self._close_position(symbol, "long", qty, price, mark_price, dt)
+                   mark_price: float, dt: str, reason: str = ""):
+        self._close_position(symbol, "long", qty, price, mark_price, dt, "close", reason)
 
     def close_short(self, symbol: str, qty: float, price: float,
-                    mark_price: float, dt: str):
-        self._close_position(symbol, "short", qty, price, mark_price, dt)
-
-    # ── 内部: 开仓 ──
+                    mark_price: float, dt: str, reason: str = ""):
+        self._close_position(symbol, "short", qty, price, mark_price, dt, "close", reason)
 
     def _open_position(self, symbol: str, side: str, qty: float, price: float,
-                       mark_price: float, dt: str, leverage: int = None):
+                       mark_price: float, dt: str, leverage: int = None,
+                       reason: str = ""):
         pos = self.account.get_position(symbol)
         lev = leverage or pos.leverage or self.default_leverage
         pos.leverage = lev
@@ -220,13 +217,12 @@ class BacktestEngine:
             quantity=qty, price=fill_price, mark_price=mark_price,
             leverage=lev, margin_used=required_margin,
             commission=commission, slippage=abs(slippage * qty),
-            funding_fee=0.0, realized_pnl=0.0,
+            funding_fee=0.0, realized_pnl=0.0, reason=reason,
         ))
 
-    # ── 内部: 平仓 ──
-
     def _close_position(self, symbol: str, side: str, qty: float, price: float,
-                        mark_price: float, dt: str, action: str = "close"):
+                        mark_price: float, dt: str, action: str = "close",
+                        reason: str = ""):
         pos = self.account.get_position(symbol)
         if pos.side != side or pos.quantity == 0:
             return
@@ -263,14 +259,12 @@ class BacktestEngine:
             quantity=close_qty, price=fill_price, mark_price=mark_price,
             leverage=pos.leverage, margin_used=0,
             commission=commission, slippage=abs(slippage * close_qty),
-            funding_fee=0.0, realized_pnl=realized_pnl,
+            funding_fee=0.0, realized_pnl=realized_pnl, reason=reason,
         ))
-
-    # ── 每 bar 检查 ──
 
     def on_bar(self, dt: str, prices: dict[str, dict],
                funding_rates: dict[str, float] = None):
-        """每 bar 执行: 更新盈亏 → 资金费率 → 止损止盈 → 强平 → 记录净值"""
+        """每 bar：更新盈亏 → 资金费率 → 止损止盈 → 强平 → 记录净值"""
         for symbol, pos in list(self.account.positions.items()):
             if pos.side == "none":
                 continue
@@ -294,7 +288,6 @@ class BacktestEngine:
             "balance": self.account.balance,
             "unrealized_pnl": self.account.total_unrealized_pnl,
             "used_margin": self.account.used_margin,
-            "drawdown": 0.0,
         })
 
     def _settle_funding(self, pos: _Position, funding_rate: float,
@@ -335,7 +328,8 @@ class BacktestEngine:
             if triggered:
                 logger.info(f"[{dt}] 止损触发: {pos.symbol} {pos.side} @ {pos.stop_loss}")
                 self._close_position(
-                    pos.symbol, pos.side, pos.quantity, pos.stop_loss, mark, dt, "close",
+                    pos.symbol, pos.side, pos.quantity, pos.stop_loss, mark, dt,
+                    "stop_loss", "止损触发",
                 )
                 return
 
@@ -347,7 +341,8 @@ class BacktestEngine:
             if triggered:
                 logger.info(f"[{dt}] 止盈触发: {pos.symbol} {pos.side} @ {pos.take_profit}")
                 self._close_position(
-                    pos.symbol, pos.side, pos.quantity, pos.take_profit, mark, dt, "close",
+                    pos.symbol, pos.side, pos.quantity, pos.take_profit, mark, dt,
+                    "take_profit", "止盈触发",
                 )
 
     def _check_liquidation(self, pos: _Position, mark_price: float, dt: str):
@@ -373,10 +368,9 @@ class BacktestEngine:
                 datetime=dt, symbol=pos.symbol, side="none", action="liquidation",
                 quantity=0, price=mark_price, mark_price=mark_price,
                 leverage=pos.leverage, margin_used=0,
-                commission=0, slippage=0, funding_fee=0, realized_pnl=-lost_margin,
+                commission=0, slippage=0, funding_fee=0,
+                realized_pnl=-lost_margin, reason="强制平仓",
             ))
-
-    # ── 结果汇总 ──
 
     def get_result(self) -> dict:
         eq_df = pd.DataFrame(self.account.equity_curve)
@@ -386,7 +380,6 @@ class BacktestEngine:
         equities = eq_df["equity"].values
         peak = np.maximum.accumulate(equities)
         drawdowns = (equities - peak) / peak
-        eq_df["drawdown"] = drawdowns
 
         returns = np.diff(equities) / equities[:-1] if len(equities) > 1 else np.array([0])
 
@@ -395,29 +388,13 @@ class BacktestEngine:
         annual_return = (1 + total_return) ** (365 / max(n_days, 1)) - 1
         volatility = float(np.std(returns) * np.sqrt(365)) if len(returns) > 1 else 0
 
-        sharpe = (annual_return) / volatility if volatility > 0 else 0
+        sharpe = annual_return / volatility if volatility > 0 else 0
         downside = returns[returns < 0]
         downside_std = float(np.std(downside) * np.sqrt(365)) if len(downside) > 0 else 0
         sortino = annual_return / downside_std if downside_std > 0 else 0
 
         max_dd = float(np.min(drawdowns))
-        max_dd_idx = int(np.argmin(drawdowns))
-        peak_idx = int(np.argmax(equities[:max_dd_idx + 1])) if max_dd_idx > 0 else 0
-        max_dd_duration = max_dd_idx - peak_idx
         calmar = annual_return / abs(max_dd) if max_dd != 0 else 0
-
-        trades = self.account.trade_log
-        close_trades = [
-            t for t in trades
-            if t.action in ("close", "liquidation") and t.realized_pnl != 0
-        ]
-        wins = [t for t in close_trades if t.realized_pnl > 0]
-        losses = [t for t in close_trades if t.realized_pnl < 0]
-        win_rate = len(wins) / len(close_trades) if close_trades else 0
-        avg_win = float(np.mean([t.realized_pnl for t in wins])) if wins else 0
-        avg_loss = float(abs(np.mean([t.realized_pnl for t in losses]))) if losses else 0
-        profit_loss_ratio = avg_win / avg_loss if avg_loss > 0 else float("inf")
-
         net_funding = self.account.total_funding_received - self.account.total_funding_paid
 
         return {
@@ -427,264 +404,75 @@ class BacktestEngine:
                 "sharpe_ratio": sharpe,
                 "sortino_ratio": sortino,
                 "max_drawdown": max_dd,
-                "max_drawdown_duration": int(max_dd_duration),
                 "calmar_ratio": calmar,
                 "volatility": volatility,
-                "win_rate": win_rate,
-                "profit_loss_ratio": profit_loss_ratio,
-                "total_trades": len(trades),
+                "total_commission": self.account.total_commission,
+                "total_slippage_cost": self.account.total_slippage_cost,
                 "total_funding_paid": self.account.total_funding_paid,
                 "total_funding_received": self.account.total_funding_received,
                 "net_funding": net_funding,
-                "total_commission": self.account.total_commission,
-                "total_slippage_cost": self.account.total_slippage_cost,
                 "liquidation_count": self.account.liquidation_count,
             },
             "equity_curve": eq_df.to_dict("records"),
-            "trade_log": [vars(t) for t in trades],
+            "trade_log": [vars(t) for t in self.account.trade_log],
             "funding_log": self.account.funding_log,
         }
 
 
 # ═══════════════════════════════════════════
-#  指标计算：从 StrategySpec.features 生成列
-# ═══════════════════════════════════════════
-
-
-_INDICATOR_BUILDERS = {
-    "sma": lambda df, p: Indicators.sma(df["close"].values, p.get("period", 20)),
-    "ema": lambda df, p: Indicators.ema(df["close"].values, p.get("period", 20)),
-    "rsi": lambda df, p: Indicators.rsi(df["close"].values, p.get("period", 14)),
-    "atr": lambda df, p: Indicators.atr(
-        df["high"].values, df["low"].values, df["close"].values, p.get("period", 14),
-    ),
-    "volume_ma": lambda df, p: Indicators.volume_ma(df["volume"].values, p.get("period", 20)),
-}
-
-
-def _build_macd(df: pd.DataFrame, params: dict) -> dict[str, np.ndarray]:
-    fast = params.get("fast_period", 12)
-    slow = params.get("slow_period", 26)
-    signal = params.get("signal_period", 9)
-    line, sig, hist = Indicators.macd(df["close"].values, fast, slow, signal)
-    return {"macd_line": line, "macd_signal": sig, "macd_hist": hist}
-
-
-def _build_bollinger(df: pd.DataFrame, params: dict) -> dict[str, np.ndarray]:
-    period = params.get("period", 20)
-    num_std = params.get("num_std", 2.0)
-    upper, middle, lower = Indicators.bollinger_bands(df["close"].values, period, num_std)
-    return {"bb_upper": upper, "bb_middle": middle, "bb_lower": lower}
-
-
-def _build_kdj(df: pd.DataFrame, params: dict) -> dict[str, np.ndarray]:
-    k_period = params.get("k_period", 9)
-    d_period = params.get("d_period", 3)
-    j_smooth = params.get("j_smooth", 3)
-    k, d, j = Indicators.kdj(
-        df["high"].values, df["low"].values, df["close"].values,
-        k_period, d_period, j_smooth,
-    )
-    return {"kdj_k": k, "kdj_d": d, "kdj_j": j}
-
-
-def compute_indicators(df: pd.DataFrame, features: list[dict]) -> pd.DataFrame:
-    """
-    根据 features 配置列表，在 df 上计算所有指标并添加为新列。
-
-    features 示例:
-        [
-            {"name": "sma_20", "indicator": "sma", "params": {"period": 20}},
-            {"name": "rsi_14", "indicator": "rsi", "params": {"period": 14}},
-            {"name": "macd",   "indicator": "macd", "params": {}},
-            {"name": "bb",     "indicator": "bollinger", "params": {"period": 20}},
-        ]
-
-    对于返回多列的指标 (macd/bollinger/kdj)，name 字段被忽略，
-    使用预设列名 (macd_line/macd_signal/macd_hist 等)。
-    """
-    df = df.copy()
-
-    for feat in features:
-        indicator = feat.get("indicator", feat.get("name", "")).lower()
-        params = feat.get("params", {})
-        name = feat.get("name", indicator)
-
-        if indicator == "macd":
-            for col_name, values in _build_macd(df, params).items():
-                df[col_name] = values
-        elif indicator in ("bollinger", "bb", "bollinger_bands"):
-            for col_name, values in _build_bollinger(df, params).items():
-                df[col_name] = values
-        elif indicator == "kdj":
-            for col_name, values in _build_kdj(df, params).items():
-                df[col_name] = values
-        elif indicator in _INDICATOR_BUILDERS:
-            df[name] = _INDICATOR_BUILDERS[indicator](df, params)
-        else:
-            logger.warning(f"未知指标: {indicator}，跳过")
-
-    return df
-
-
-# ═══════════════════════════════════════════
-#  规则求值器：解析 "close > sma_20" 等字符串
-# ═══════════════════════════════════════════
-
-
-_COMPARISON_OPS = {
-    ">=": lambda a, b: a >= b,
-    "<=": lambda a, b: a <= b,
-    ">":  lambda a, b: a > b,
-    "<":  lambda a, b: a < b,
-    "==": lambda a, b: a == b,
-    "!=": lambda a, b: a != b,
-}
-
-_OP_PATTERN = re.compile(r"(>=|<=|!=|==|>|<)")
-
-
-def _resolve_value(token: str, row: pd.Series) -> float:
-    """
-    解析一个 token：如果是 DataFrame 列名则取值，否则作为浮点字面量。
-
-    支持的列名: close, open, high, low, volume, sma_20, rsi_14,
-    macd_line, macd_hist, bb_upper, bb_lower 等任意已计算列。
-    """
-    token = token.strip()
-    if token in row.index:
-        val = row[token]
-        return float(val) if not pd.isna(val) else float("nan")
-    try:
-        return float(token)
-    except ValueError:
-        raise ValueError(f"无法解析 token: '{token}'，不是已知列名也不是数值")
-
-
-def evaluate_rule(rule: str, row: pd.Series) -> bool:
-    """
-    对单行数据求值一条规则。
-
-    规则格式: "<左操作数> <比较运算符> <右操作数>"
-    示例: "close > sma_20", "rsi_14 < 30", "macd_hist > 0"
-
-    任一操作数为 NaN 时返回 False。
-    """
-    parts = _OP_PATTERN.split(rule, maxsplit=1)
-    if len(parts) != 3:
-        logger.warning(f"规则格式错误: '{rule}'，需要 '<left> <op> <right>'")
-        return False
-
-    left_token, op, right_token = parts
-    try:
-        left_val = _resolve_value(left_token, row)
-        right_val = _resolve_value(right_token, row)
-    except ValueError as e:
-        logger.warning(f"规则求值失败: {e}")
-        return False
-
-    if np.isnan(left_val) or np.isnan(right_val):
-        return False
-
-    return _COMPARISON_OPS[op](left_val, right_val)
-
-
-def evaluate_rules(rules: list[str], row: pd.Series) -> bool:
-    """所有规则取 AND：全部为 True 才触发信号。"""
-    if not rules:
-        return False
-    return all(evaluate_rule(r, row) for r in rules)
-
-
-# ═══════════════════════════════════════════
-#  顶层入口: run_backtest
+#  入口：信号驱动回测
 # ═══════════════════════════════════════════
 
 
 def run_backtest(
     df: pd.DataFrame,
-    spec: dict,
+    signals: list[dict],
     config: dict,
-    funding_df: pd.DataFrame = None,
 ) -> dict:
     """
-    端到端回测。
+    信号驱动回测。
 
     参数:
-        df: OHLCV DataFrame，必须包含 datetime/open/high/low/close/volume
-        spec: StrategySpec dict (可由 StrategySpec.model_dump() 得到)
-        config: BacktestRequest 中的回测参数 dict，字段:
-            initial_capital, fee_rate, slippage_bps, margin_mode,
-            funding_rate_enabled, start_date, end_date
-        funding_df: 可选的资金费率 DataFrame [datetime, funding_rate]
+        df: OHLCV DataFrame (datetime/open/high/low/close/volume)
+        signals: 信号列表 [{timestamp, symbol, action, direction, confidence,
+                  reason, price_at_signal, suggested_stop_loss, suggested_take_profit}]
+        config: 回测配置 {symbol, initial_capital, leverage, fee_rate,
+                slippage_bps, margin_mode, direction, risk_per_trade}
 
     返回:
-        {
-            "metrics": { ... BacktestMetrics 各字段 ... },
-            "trades": [ ... 交易记录列表 ... ],
-            "equity_curve": [ ... {datetime, equity} 列表 ... ],
-        }
+        {metrics, trades, equity_curve}
     """
     if df.empty:
         return {"metrics": {}, "trades": [], "equity_curve": [], "error": "数据为空"}
 
-    # ── 1) 计算指标 ──
-    features = spec.get("features", [])
-    if isinstance(features, list) and features:
-        feat_dicts = []
-        for f in features:
-            if isinstance(f, dict):
-                feat_dicts.append(f)
-            elif hasattr(f, "model_dump"):
-                feat_dicts.append(f.model_dump())
-            else:
-                feat_dicts.append({"name": str(f), "indicator": str(f), "params": {}})
-        df = compute_indicators(df, feat_dicts)
-
-    # ── 2) 初始化引擎 ──
-    pos_sizing = spec.get("position_sizing", {})
-    if hasattr(pos_sizing, "model_dump"):
-        pos_sizing = pos_sizing.model_dump()
-
-    risk_limits = spec.get("risk_limits", {})
-    if hasattr(risk_limits, "model_dump"):
-        risk_limits = risk_limits.model_dump()
-
-    leverage = pos_sizing.get("leverage", 1)
+    symbol = config.get("symbol", "UNKNOWN")
+    leverage = config.get("leverage", 1)
+    direction = config.get("direction", "long_short")
+    risk_per_trade = config.get("risk_per_trade", 0.02)
 
     engine = BacktestEngine(
         initial_capital=config.get("initial_capital", 100_000.0),
         default_leverage=leverage,
         margin_mode=config.get("margin_mode", "isolated"),
-        slippage_bps=config.get("slippage_bps", 2.0),
+        slippage_bps=config.get("slippage_bps", 5.0),
         taker_fee=config.get("fee_rate", 0.0005),
         maker_fee=config.get("fee_rate", 0.0005) * 0.4,
-        enable_funding=config.get("funding_rate_enabled", True),
+        enable_funding=True,
         enable_liquidation=True,
         maintenance_margin_rate=0.005,
     )
 
-    entry_rules = spec.get("entry_rules", [])
-    exit_rules = spec.get("exit_rules", [])
-    direction = spec.get("direction", "long_short")
-    universe = spec.get("universe", ["UNKNOWN"])
-    symbol = universe[0] if universe else "UNKNOWN"
+    # 将信号按时间戳索引，支持同一时刻多个信号
+    signal_map: dict[str, list[dict]] = {}
+    for sig in signals:
+        ts = sig.get("timestamp", "")
+        if ts not in signal_map:
+            signal_map[ts] = []
+        signal_map[ts].append(sig)
 
-    stop_loss_pct = risk_limits.get("stop_loss")
-    take_profit_pct = risk_limits.get("take_profit")
-    risk_per_trade = pos_sizing.get("risk_per_trade", 0.005)
-    sizing_mode = pos_sizing.get("mode", "risk_based")
-
-    # ── 3) 预处理资金费率索引 ──
-    funding_map: dict[str, float] = {}
-    if funding_df is not None and not funding_df.empty:
-        for _, fr_row in funding_df.iterrows():
-            dt_key = str(fr_row["datetime"])
-            funding_map[dt_key] = float(fr_row["funding_rate"])
-
-    # ── 4) 遍历每根 bar ──
     holding_bars: list[int] = []
     current_hold_start: int = -1
+    signals_executed = 0
 
     for idx in range(len(df)):
         row = df.iloc[idx]
@@ -695,87 +483,99 @@ def run_backtest(
 
         pos = engine.account.get_position(symbol)
 
-        # 资金费率查找
-        fr = funding_map.get(dt_str)
-        funding_rates = {symbol: fr} if fr is not None else None
+        # 查找当前 bar 是否有信号
+        bar_signals = signal_map.get(dt_str, [])
 
-        # ── 检查退出 ──
-        if pos.side != "none":
-            exit_signal = evaluate_rules(exit_rules, row)
-            if exit_signal:
+        for sig in bar_signals:
+            action = sig.get("action", "").lower()
+            sig_direction = sig.get("direction", "long").lower()
+            reason = sig.get("reason", "")
+            sl = sig.get("suggested_stop_loss")
+            tp = sig.get("suggested_take_profit")
+
+            if action == "buy":
+                # 先平掉反向仓位
+                if sig_direction == "long" and pos.side == "short":
+                    engine.close_short(symbol, 0, close, close, dt_str, reason)
+                    if current_hold_start >= 0:
+                        holding_bars.append(idx - current_hold_start)
+                        current_hold_start = -1
+                elif sig_direction == "short" and pos.side == "long":
+                    engine.close_long(symbol, 0, close, close, dt_str, reason)
+                    if current_hold_start >= 0:
+                        holding_bars.append(idx - current_hold_start)
+                        current_hold_start = -1
+
+                pos = engine.account.get_position(symbol)
+                if pos.side == "none":
+                    qty = _calc_position_size(
+                        engine.account.available_balance, close, leverage, risk_per_trade,
+                    )
+                    if qty > 0:
+                        if sig_direction == "long" and direction in ("long", "long_short", "long_only"):
+                            engine.open_long(symbol, qty, close, close, dt_str, leverage, reason)
+                        elif sig_direction == "short" and direction in ("short", "short_only", "long_short"):
+                            engine.open_short(symbol, qty, close, close, dt_str, leverage, reason)
+
+                        pos = engine.account.get_position(symbol)
+                        if pos.side != "none":
+                            if sl is not None:
+                                pos.stop_loss = sl
+                            if tp is not None:
+                                pos.take_profit = tp
+                            current_hold_start = idx
+                            signals_executed += 1
+
+            elif action in ("sell", "close"):
                 if pos.side == "long":
-                    engine.close_long(symbol, 0, close, close, dt_str)
-                else:
-                    engine.close_short(symbol, 0, close, close, dt_str)
+                    engine.close_long(symbol, 0, close, close, dt_str, reason)
+                    signals_executed += 1
+                elif pos.side == "short":
+                    engine.close_short(symbol, 0, close, close, dt_str, reason)
+                    signals_executed += 1
                 if current_hold_start >= 0:
                     holding_bars.append(idx - current_hold_start)
                     current_hold_start = -1
 
-        # ── 检查进入 ──
-        if pos.side == "none":
-            entry_signal = evaluate_rules(entry_rules, row)
-            if entry_signal:
-                qty = _calc_position_size(
-                    engine.account.available_balance, close, leverage,
-                    sizing_mode, risk_per_trade,
-                    pos_sizing.get("fixed_quantity"),
-                )
-                if qty > 0:
-                    if direction in ("long", "long_short", "long_only"):
-                        engine.open_long(symbol, qty, close, close, dt_str, leverage)
-                    elif direction in ("short", "short_only"):
-                        engine.open_short(symbol, qty, close, close, dt_str, leverage)
-
-                    # 设置止损止盈
-                    pos = engine.account.get_position(symbol)
-                    if pos.side != "none" and stop_loss_pct:
-                        if pos.side == "long":
-                            pos.stop_loss = close * (1 - stop_loss_pct)
-                        else:
-                            pos.stop_loss = close * (1 + stop_loss_pct)
-                    if pos.side != "none" and take_profit_pct:
-                        if pos.side == "long":
-                            pos.take_profit = close * (1 + take_profit_pct)
-                        else:
-                            pos.take_profit = close * (1 - take_profit_pct)
-
-                    current_hold_start = idx
-
-        # ── 每 bar 更新 ──
         engine.on_bar(dt_str, {
             symbol: {"close": close, "high": high, "low": low, "mark_price": close},
-        }, funding_rates)
+        })
 
-    # ── 5) 尾部平仓 ──
+    # 尾部平仓
     pos = engine.account.get_position(symbol)
     if pos.side != "none" and len(df) > 0:
         last_row = df.iloc[-1]
         dt_str = str(last_row["datetime"])
         close = float(last_row["close"])
         if pos.side == "long":
-            engine.close_long(symbol, 0, close, close, dt_str)
+            engine.close_long(symbol, 0, close, close, dt_str, "回测结束平仓")
         else:
-            engine.close_short(symbol, 0, close, close, dt_str)
+            engine.close_short(symbol, 0, close, close, dt_str, "回测结束平仓")
         if current_hold_start >= 0:
             holding_bars.append(len(df) - 1 - current_hold_start)
 
-    # ── 6) 汇总结果 ──
     raw = engine.get_result()
     perf = raw.get("performance", {})
-
     trades_raw = raw.get("trade_log", [])
-    close_trades = [t for t in trades_raw if t.get("action") in ("close", "liquidation")]
+
+    close_trades = [t for t in trades_raw if t.get("action") in ("close", "stop_loss", "take_profit", "liquidation")]
     wins = [t for t in close_trades if t.get("realized_pnl", 0) > 0]
     losses_list = [t for t in close_trades if t.get("realized_pnl", 0) < 0]
+    win_rate = len(wins) / len(close_trades) if close_trades else 0
+    avg_win = float(np.mean([t["realized_pnl"] for t in wins])) if wins else 0
+    avg_loss = float(abs(np.mean([t["realized_pnl"] for t in losses_list]))) if losses_list else 0
+    profit_loss_ratio = avg_win / avg_loss if avg_loss > 0 else 0
 
     final_balance = engine.account.equity
-    peak_balance = float(np.max([e["equity"] for e in raw.get("equity_curve", [{"equity": final_balance}])]))
+    eq_data = raw.get("equity_curve", [])
+    peak_balance = float(np.max([e["equity"] for e in eq_data])) if eq_data else final_balance
     avg_hold = float(np.mean(holding_bars)) if holding_bars else 0.0
 
-    # 构建标准化 trades 输出
     formatted_trades = []
+    running_balance = engine.account.initial_capital
     for i, t in enumerate(trades_raw):
         pnl = t.get("realized_pnl", 0)
+        running_balance += pnl - t.get("commission", 0)
         price = t.get("price", 0)
         qty = t.get("quantity", 0)
         pnl_pct = pnl / (price * qty / leverage) if price * qty > 0 else 0
@@ -790,14 +590,13 @@ def run_backtest(
             "fee": t.get("commission", 0),
             "pnl": pnl,
             "pnl_pct": pnl_pct,
-            "balance_after": 0.0,
-            "reason": t.get("action", ""),
+            "balance_after": running_balance,
+            "reason": t.get("reason", ""),
         })
 
-    # 构建简化 equity_curve
     equity_curve_out = [
         {"datetime": e["datetime"], "equity": e["equity"]}
-        for e in raw.get("equity_curve", [])
+        for e in eq_data
     ]
 
     metrics = {
@@ -805,18 +604,23 @@ def run_backtest(
         "total_return_pct": perf.get("total_return", 0),
         "annual_return_pct": perf.get("annual_return", 0),
         "sharpe_ratio": perf.get("sharpe_ratio", 0),
+        "sortino_ratio": perf.get("sortino_ratio", 0),
         "max_drawdown_pct": perf.get("max_drawdown", 0),
-        "win_rate": perf.get("win_rate", 0),
-        "profit_loss_ratio": perf.get("profit_loss_ratio", 0),
-        "total_trades": perf.get("total_trades", 0),
+        "calmar_ratio": perf.get("calmar_ratio", 0),
+        "win_rate": win_rate,
+        "profit_loss_ratio": profit_loss_ratio,
+        "total_trades": len(trades_raw),
         "winning_trades": len(wins),
         "losing_trades": len(losses_list),
         "avg_holding_bars": avg_hold,
         "total_commission": perf.get("total_commission", 0),
+        "total_slippage_cost": perf.get("total_slippage_cost", 0),
         "net_funding": perf.get("net_funding", 0),
         "liquidation_count": perf.get("liquidation_count", 0),
         "final_balance": final_balance,
         "peak_balance": peak_balance,
+        "total_signals": len(signals),
+        "signals_executed": signals_executed,
     }
 
     return {
@@ -830,17 +634,10 @@ def _calc_position_size(
     available: float,
     price: float,
     leverage: int,
-    mode: str,
     risk_per_trade: float,
-    fixed_quantity: float = None,
 ) -> float:
-    """根据仓位管理模式计算下单数量。"""
-    if mode == "fixed" and fixed_quantity:
-        return fixed_quantity
-
-    # risk_based: 用可用余额的 risk_per_trade 比例作为保证金
+    """用可用余额的 risk_per_trade 比例作为保证金，杠杆放大。"""
     margin_to_use = available * risk_per_trade
-    # 杠杆放大名义价值
     nominal = margin_to_use * leverage
     qty = nominal / price if price > 0 else 0
     return qty

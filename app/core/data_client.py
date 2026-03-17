@@ -22,6 +22,7 @@ from loguru import logger
 
 BINANCE_FUTURES_BASE = "https://fapi.binance.com"
 BINANCE_SPOT_BASE = "https://api.binance.com"
+HYPERLIQUID_BASE = "https://api.hyperliquid.xyz"
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 DEFILLAMA_BASE = "https://api.llama.fi"
 
@@ -83,6 +84,17 @@ class DataClient:
             logger.warning(f"429 限流，等待 {retry}s")
             time.sleep(retry)
             resp = self._client.get(url, params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _post(self, url: str, json_body: dict) -> dict | list:
+        """POST JSON 请求（Hyperliquid API 使用 POST）。"""
+        resp = self._client.post(url, json=json_body)
+        if resp.status_code == 429:
+            retry = int(resp.headers.get("Retry-After", "5"))
+            logger.warning(f"429 限流，等待 {retry}s")
+            time.sleep(retry)
+            resp = self._client.post(url, json=json_body)
         resp.raise_for_status()
         return resp.json()
 
@@ -343,6 +355,108 @@ class DataClient:
         df = df.rename(columns={"quote_volume": "volume_usd"})
         return df[["datetime", "open", "high", "low", "close", "volume",
                     "volume_usd"]].reset_index(drop=True)
+
+    # ════════════════════════════════════════
+    #  Hyperliquid — 永续合约
+    # ════════════════════════════════════════
+
+    @staticmethod
+    def _symbol_to_hl_coin(symbol: str) -> str:
+        """BTCUSDT / BTC-USDT-PERP / BTC → BTC"""
+        s = symbol.upper().replace("-PERP", "").replace("-SPOT", "")
+        for suffix in ("USDT", "USDC", "USD", "BUSD"):
+            if s.endswith(suffix) and len(s) > len(suffix):
+                s = s[:-len(suffix)]
+                break
+        return s.split("-")[0]
+
+    def get_hl_perp_klines(
+        self,
+        symbol: str,
+        interval: str = "1h",
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """Hyperliquid 永续合约 K 线。最多 5000 根/次，自动分页。"""
+        coin = self._symbol_to_hl_coin(symbol)
+        hl_interval = INTERVAL_MAP.get(interval, interval)
+
+        start_ms = _ts_ms(start_date) if start_date else int((time.time() - 86400 * 30) * 1000)
+        end_ms = _ts_ms(end_date) if end_date else int(time.time() * 1000)
+
+        all_rows: list = []
+        cursor = start_ms
+
+        while cursor < end_ms:
+            body = {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": coin,
+                    "interval": hl_interval,
+                    "startTime": cursor,
+                    "endTime": end_ms,
+                },
+            }
+            data = self._post(f"{HYPERLIQUID_BASE}/info", body)
+            if not data:
+                break
+            all_rows.extend(data)
+            if len(data) < 5000:
+                break
+            cursor = data[-1]["T"] + 1
+            time.sleep(0.2)
+
+        if not all_rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_rows)
+        df["datetime"] = pd.to_datetime(df["t"], unit="ms", utc=True)
+        df["open"] = df["o"].astype(float)
+        df["high"] = df["h"].astype(float)
+        df["low"] = df["l"].astype(float)
+        df["close"] = df["c"].astype(float)
+        df["volume"] = df["v"].astype(float)
+        df["trades"] = df["n"].astype(int)
+        df["volume_usd"] = df["close"] * df["volume"]
+
+        return df[["datetime", "open", "high", "low", "close", "volume",
+                    "volume_usd", "trades"]].reset_index(drop=True)
+
+    def get_hl_funding_rate(
+        self,
+        symbol: str,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """Hyperliquid 资金费率历史（每 8h）。"""
+        coin = self._symbol_to_hl_coin(symbol)
+
+        start_ms = _ts_ms(start_date) if start_date else int((time.time() - 86400 * 30) * 1000)
+        end_ms = _ts_ms(end_date) if end_date else int(time.time() * 1000)
+
+        body: dict = {
+            "type": "fundingHistory",
+            "coin": coin,
+            "startTime": start_ms,
+        }
+        if end_date:
+            body["endTime"] = end_ms
+
+        data = self._post(f"{HYPERLIQUID_BASE}/info", body)
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data)
+        df["datetime"] = pd.to_datetime(df["time"], unit="ms", utc=True)
+        df["funding_rate"] = df["fundingRate"].astype(float)
+        df["mark_price"] = df.get("premium", pd.Series([0.0] * len(df))).astype(float)
+        return df[["datetime", "funding_rate", "mark_price"]].reset_index(drop=True)
+
+    def list_hl_perp_symbols(self) -> list[str]:
+        """列出 Hyperliquid 所有永续合约代码。"""
+        data = self._post(f"{HYPERLIQUID_BASE}/info", {"type": "meta"})
+        universe = data.get("universe", [])
+        return [item["name"] for item in universe if isinstance(item, dict) and "name" in item]
 
     # ════════════════════════════════════════
     #  CoinGecko — 代币价格

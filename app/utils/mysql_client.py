@@ -221,9 +221,9 @@ class MysqlSQL(object, metaclass=Singleton):
         conn = self.connect()
         try:
             cur = conn.cursor()
-            columns = ', '.join(data.keys())
+            columns = ', '.join([f'`{k}`' for k in data.keys()])
             placeholders = ', '.join(['%s'] * len(data))
-            update_clause = ', '.join([f"{key} = VALUES({key})" for key in data.keys()])
+            update_clause = ', '.join([f'`{key}` = VALUES(`{key}`)' for key in data.keys()])
             query = f"""
                 INSERT INTO {table} ({columns})
                 VALUES ({placeholders})

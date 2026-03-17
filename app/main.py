@@ -1,5 +1,8 @@
 """
 DEX Quant Server — FastAPI 应用入口
+
+信号驱动架构：
+  Skill 生成策略脚本 → 跑脚本产出信号 → 发信号到 Server → Server 拉 K 线 + 回测
 """
 
 from contextlib import asynccontextmanager
@@ -11,7 +14,7 @@ from loguru import logger
 
 from app import database
 from app import config
-from app.routers import data, strategy, backtest, signal, trade
+from app.routers import auth, data, strategy, backtest, signal
 
 
 @asynccontextmanager
@@ -23,8 +26,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="DEX Quant Server",
-    description="量化回测服务 — 策略管理、数据获取、回测执行",
-    version="1.0.0",
+    description="信号驱动回测服务 — 接收策略信号，拉取 K 线（带缓存），执行回测",
+    version="2.1.0",
     lifespan=lifespan,
     redoc_url=None,
     docs_url=None,
@@ -56,13 +59,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router, prefix=config.API_PREFIX)
 app.include_router(data.router, prefix=config.API_PREFIX)
 app.include_router(strategy.router, prefix=config.API_PREFIX)
 app.include_router(backtest.router, prefix=config.API_PREFIX)
 app.include_router(signal.router, prefix=config.API_PREFIX)
-app.include_router(trade.router, prefix=config.API_PREFIX)
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "2.1.0"}

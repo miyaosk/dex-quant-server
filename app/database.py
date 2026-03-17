@@ -1,14 +1,19 @@
 """
-数据库层 — 基于 MysqlSQL 连接池封装
+数据库层 — 信号驱动架构的 MySQL 表结构
 
-使用 asyncio.to_thread 将同步 pymysql 操作包装为异步，
-避免阻塞 FastAPI 事件循环。
+表:
+  dex_machine_tokens   — 机器码 → Token 映射（免费 3 策略配额）
+  dex_strategies       — 策略定义（含脚本源码，关联 machine_code）
+  dex_backtest_results — 回测结果（含信号快照）
+  dex_kline_cache      — K 线缓存
+  dex_signals          — 策略信号记录
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from typing import Optional
 
 from loguru import logger
@@ -21,44 +26,70 @@ from app.utils.mysql_client import mysql
 
 _CREATE_TABLES_SQL = [
     """
+    CREATE TABLE IF NOT EXISTS dex_machine_tokens (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        machine_code VARCHAR(64) NOT NULL COMMENT '客户端硬件指纹哈希',
+        token VARCHAR(128) NOT NULL COMMENT '分配的 API Token',
+        max_strategies INT DEFAULT 3 COMMENT '最大策略数（免费配额）',
+        status VARCHAR(32) DEFAULT 'active' COMMENT 'active / suspended',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_machine_code (machine_code),
+        UNIQUE KEY uk_token (token),
+        INDEX idx_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='机器码-Token 映射表'
+    """,
+    """
     CREATE TABLE IF NOT EXISTS dex_strategies (
         strategy_id VARCHAR(64) PRIMARY KEY COMMENT '策略唯一ID',
+        machine_code VARCHAR(64) DEFAULT '' COMMENT '所属机器码',
         name VARCHAR(255) NOT NULL COMMENT '策略名称',
-        version VARCHAR(32) DEFAULT 'v1.0' COMMENT '策略版本号',
-        spec_json JSON NOT NULL COMMENT '策略完整规范(交易对/时间周期/入场出场规则/仓位管理等)',
-        lifecycle_state VARCHAR(32) DEFAULT 'draft' COMMENT '生命周期状态: draft/active/archived',
+        description TEXT COMMENT '策略描述（自然语言）',
+        script_content LONGTEXT COMMENT '策略脚本源码（.py）',
+        symbol VARCHAR(64) DEFAULT 'BTCUSDT' COMMENT '主交易对',
+        timeframe VARCHAR(16) DEFAULT '1h' COMMENT 'K线周期: 15m/1h/2h/1d',
+        direction VARCHAR(32) DEFAULT 'long_short' COMMENT '方向: long/short/long_short',
+        version VARCHAR(32) DEFAULT 'v1.0' COMMENT '版本号',
+        tags TEXT COMMENT '标签JSON数组',
+        status VARCHAR(32) DEFAULT 'draft' COMMENT '状态: draft/active/archived',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
-        INDEX idx_lifecycle (lifecycle_state),
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        INDEX idx_machine_code (machine_code),
+        INDEX idx_status (status),
+        INDEX idx_symbol (symbol),
         INDEX idx_updated (updated_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='量化策略定义表'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略定义表（脚本为核心）'
     """,
     """
     CREATE TABLE IF NOT EXISTS dex_backtest_results (
         backtest_id VARCHAR(64) PRIMARY KEY COMMENT '回测任务唯一ID',
         strategy_id VARCHAR(64) NOT NULL COMMENT '关联策略ID',
-        config_json JSON NOT NULL COMMENT '回测配置(起止日期/初始资金/手续费率/杠杆等)',
-        metrics_json JSON COMMENT '绩效指标(收益率/夏普比率/最大回撤/胜率等)',
-        trades_json LONGTEXT COMMENT '全部交易记录JSON',
-        equity_json LONGTEXT COMMENT '权益曲线数据JSON',
-        status VARCHAR(32) DEFAULT 'running' COMMENT '回测状态: running/completed/failed',
-        error TEXT COMMENT '失败时的错误信息',
+        strategy_name VARCHAR(255) DEFAULT '' COMMENT '策略名称快照',
+        config_json JSON NOT NULL COMMENT '回测配置',
+        signals_json LONGTEXT COMMENT '回测使用的信号列表（JSON快照）',
+        metrics_json JSON COMMENT '绩效指标',
+        trades_json LONGTEXT COMMENT '交易记录JSON',
+        equity_json LONGTEXT COMMENT '权益曲线JSON',
+        conclusion VARCHAR(32) DEFAULT '' COMMENT '评估结论: approved/paper_trade_first/rejected/failed',
+        status VARCHAR(32) DEFAULT 'running' COMMENT '状态: running/completed/failed',
+        error TEXT COMMENT '错误信息',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        elapsed_ms INT DEFAULT 0 COMMENT '回测耗时(毫秒)',
+        elapsed_ms INT DEFAULT 0 COMMENT '耗时(毫秒)',
         INDEX idx_strategy (strategy_id),
         INDEX idx_status (status),
+        INDEX idx_conclusion (conclusion),
         INDEX idx_created (created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='回测结果表'
     """,
     """
     CREATE TABLE IF NOT EXISTS dex_kline_cache (
-        cache_key VARCHAR(512) PRIMARY KEY COMMENT '缓存键(market:symbol:interval:start:end)',
-        symbol VARCHAR(64) NOT NULL COMMENT '交易对(如BTCUSDT)',
-        `interval` VARCHAR(16) NOT NULL COMMENT 'K线周期(1m/5m/15m/1h/4h/1d)',
-        market VARCHAR(32) NOT NULL COMMENT '市场类型: crypto_futures/crypto_spot/stock/commodity/metal',
-        data_json LONGTEXT NOT NULL COMMENT 'K线数据JSON(OHLCV)',
+        cache_key VARCHAR(512) PRIMARY KEY COMMENT '缓存键',
+        symbol VARCHAR(64) NOT NULL COMMENT '交易对',
+        `interval` VARCHAR(16) NOT NULL COMMENT 'K线周期',
+        market VARCHAR(32) NOT NULL COMMENT '市场类型',
+        data_json LONGTEXT NOT NULL COMMENT 'K线数据JSON',
         row_count INT DEFAULT 0 COMMENT 'K线条数',
-        fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '数据拉取时间(用于缓存过期判断)',
+        fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '拉取时间',
         INDEX idx_symbol (symbol),
         INDEX idx_fetched (fetched_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='K线数据缓存表'
@@ -67,74 +98,24 @@ _CREATE_TABLES_SQL = [
     CREATE TABLE IF NOT EXISTS dex_signals (
         signal_id VARCHAR(64) PRIMARY KEY COMMENT '信号唯一ID',
         strategy_id VARCHAR(64) NOT NULL COMMENT '关联策略ID',
+        timestamp VARCHAR(64) NOT NULL COMMENT '信号时间戳',
         symbol VARCHAR(64) NOT NULL COMMENT '交易对',
-        timeframe VARCHAR(16) NOT NULL COMMENT 'K线周期',
-        signal_type VARCHAR(32) NOT NULL COMMENT '信号类型: entry_long/entry_short/exit_long/exit_short',
-        strength DOUBLE DEFAULT 0.5 COMMENT '信号强度(0-1)',
-        price_at_signal DOUBLE NOT NULL COMMENT '信号触发时价格',
-        stop_loss_price DOUBLE COMMENT '建议止损价',
-        take_profit_price DOUBLE COMMENT '建议止盈价',
-        triggered_by TEXT COMMENT '触发规则列表JSON',
-        feature_snapshot JSON COMMENT '触发时的指标快照',
-        confidence DOUBLE COMMENT '置信度(0-1)',
-        ttl_seconds INT COMMENT '信号有效期(秒)',
+        action VARCHAR(16) NOT NULL COMMENT 'buy/sell/close/hold',
+        direction VARCHAR(16) DEFAULT 'long' COMMENT 'long/short',
+        confidence DOUBLE DEFAULT 1.0 COMMENT '置信度(0-1)',
+        reason TEXT COMMENT '触发原因',
+        source_type VARCHAR(32) DEFAULT 'technical' COMMENT '信号来源类型',
+        price_at_signal DOUBLE DEFAULT 0 COMMENT '信号时价格',
+        suggested_stop_loss DOUBLE COMMENT '建议止损价',
+        suggested_take_profit DOUBLE COMMENT '建议止盈价',
         metadata JSON COMMENT '附加元数据',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
         INDEX idx_strategy (strategy_id),
         INDEX idx_symbol (symbol),
-        INDEX idx_type (signal_type),
+        INDEX idx_action (action),
+        INDEX idx_timestamp (timestamp),
         INDEX idx_created (created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='交易信号表'
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS dex_trades (
-        trade_id VARCHAR(64) PRIMARY KEY COMMENT '交易唯一ID',
-        signal_id VARCHAR(64) COMMENT '触发该交易的信号ID(可为空,手动交易时)',
-        strategy_id VARCHAR(64) NOT NULL COMMENT '关联策略ID',
-        exchange VARCHAR(32) NOT NULL COMMENT '交易平台: binance/hyperliquid',
-        symbol VARCHAR(64) NOT NULL COMMENT '交易对',
-        side VARCHAR(16) NOT NULL COMMENT '方向: buy/sell',
-        quantity DOUBLE NOT NULL COMMENT '数量',
-        price DOUBLE NOT NULL COMMENT '成交价格',
-        fee DOUBLE DEFAULT 0 COMMENT '手续费',
-        fee_asset VARCHAR(16) DEFAULT 'USDT' COMMENT '手续费币种',
-        order_type VARCHAR(16) DEFAULT 'market' COMMENT '订单类型: market/limit',
-        leverage INT DEFAULT 1 COMMENT '杠杆倍数',
-        margin_mode VARCHAR(16) DEFAULT 'isolated' COMMENT '保证金模式: isolated/cross',
-        status VARCHAR(16) DEFAULT 'filled' COMMENT '状态: pending/filled/cancelled/failed',
-        exchange_order_id VARCHAR(128) COMMENT '交易所返回的订单ID',
-        notes TEXT COMMENT '备注',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '成交时间',
-        INDEX idx_strategy (strategy_id),
-        INDEX idx_signal (signal_id),
-        INDEX idx_exchange (exchange),
-        INDEX idx_symbol (symbol),
-        INDEX idx_side (side),
-        INDEX idx_created (created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='实盘交易记录表'
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS dex_positions (
-        position_id VARCHAR(64) PRIMARY KEY COMMENT '持仓唯一ID',
-        strategy_id VARCHAR(64) NOT NULL COMMENT '关联策略ID',
-        exchange VARCHAR(32) NOT NULL COMMENT '交易平台',
-        symbol VARCHAR(64) NOT NULL COMMENT '交易对',
-        side VARCHAR(16) NOT NULL COMMENT '持仓方向: long/short',
-        quantity DOUBLE NOT NULL DEFAULT 0 COMMENT '当前持仓数量',
-        avg_entry_price DOUBLE NOT NULL DEFAULT 0 COMMENT '平均入场价',
-        leverage INT DEFAULT 1 COMMENT '杠杆倍数',
-        margin_mode VARCHAR(16) DEFAULT 'isolated' COMMENT '保证金模式',
-        realized_pnl DOUBLE DEFAULT 0 COMMENT '已实现盈亏',
-        total_fee DOUBLE DEFAULT 0 COMMENT '累计手续费',
-        status VARCHAR(16) DEFAULT 'open' COMMENT '状态: open/closed',
-        opened_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '开仓时间',
-        closed_at DATETIME COMMENT '平仓时间',
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
-        INDEX idx_strategy (strategy_id),
-        INDEX idx_exchange_symbol (exchange, symbol),
-        INDEX idx_status (status),
-        INDEX idx_opened (opened_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='持仓跟踪表'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略信号表'
     """,
 ]
 
@@ -144,11 +125,22 @@ _CREATE_TABLES_SQL = [
 # ═══════════════════════════════════════════
 
 
+_MIGRATIONS_SQL = [
+    "ALTER TABLE dex_strategies ADD COLUMN machine_code VARCHAR(64) DEFAULT '' COMMENT '所属机器码' AFTER strategy_id",
+    "ALTER TABLE dex_strategies ADD INDEX idx_machine_code (machine_code)",
+]
+
+
 async def init_db() -> None:
-    """建表（如果不存在）。"""
+    """建表（如果不存在）+ 兼容性迁移。"""
     def _init():
         for sql in _CREATE_TABLES_SQL:
             mysql.execute_sql(sql)
+        for sql in _MIGRATIONS_SQL:
+            try:
+                mysql.execute_sql(sql)
+            except Exception:
+                pass
 
     await asyncio.to_thread(_init)
     logger.info(f"MySQL 初始化完成: {mysql.db_conf['host']}:{mysql.db_conf['port']}/{mysql.db_conf['db']}")
@@ -162,23 +154,33 @@ async def init_db() -> None:
 async def save_strategy(
     strategy_id: str,
     name: str,
-    version: str,
-    spec_json: str,
-    lifecycle_state: str = "draft",
+    description: str = "",
+    script_content: str = "",
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    direction: str = "long_short",
+    version: str = "v1.0",
+    tags: str = "[]",
+    status: str = "draft",
+    machine_code: str = "",
 ) -> None:
-    """保存或更新策略。"""
     data = {
         "strategy_id": strategy_id,
+        "machine_code": machine_code,
         "name": name,
+        "description": description,
+        "script_content": script_content,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "direction": direction,
         "version": version,
-        "spec_json": spec_json,
-        "lifecycle_state": lifecycle_state,
+        "tags": tags,
+        "status": status,
     }
     await asyncio.to_thread(mysql.upsert, data, "dex_strategies")
 
 
 async def get_strategy(strategy_id: str) -> Optional[dict]:
-    """按 ID 获取策略，返回 dict 或 None。"""
     rows = await asyncio.to_thread(
         mysql.select_where, "dex_strategies", {"strategy_id": strategy_id}, True
     )
@@ -186,10 +188,9 @@ async def get_strategy(strategy_id: str) -> Optional[dict]:
 
 
 async def list_strategies() -> list[dict]:
-    """列出所有策略（按更新时间倒序）。"""
     rows = await asyncio.to_thread(
         mysql.execute_sql,
-        "SELECT strategy_id, name, version, spec_json, lifecycle_state, created_at, updated_at "
+        "SELECT strategy_id, name, symbol, timeframe, version, status, created_at, updated_at "
         "FROM dex_strategies ORDER BY updated_at DESC",
         None,
         True,
@@ -205,22 +206,27 @@ async def list_strategies() -> list[dict]:
 async def save_backtest_result(
     backtest_id: str,
     strategy_id: str,
+    strategy_name: str,
     config_json: str,
+    signals_json: Optional[str],
     metrics_json: Optional[str],
     trades_json: Optional[str],
     equity_json: Optional[str],
+    conclusion: str,
     status: str,
     error: Optional[str],
     elapsed_ms: int,
 ) -> None:
-    """保存回测结果。"""
     data = {
         "backtest_id": backtest_id,
         "strategy_id": strategy_id,
+        "strategy_name": strategy_name,
         "config_json": config_json,
+        "signals_json": signals_json,
         "metrics_json": metrics_json,
         "trades_json": trades_json,
         "equity_json": equity_json,
+        "conclusion": conclusion,
         "status": status,
         "error": error,
         "elapsed_ms": elapsed_ms,
@@ -229,7 +235,6 @@ async def save_backtest_result(
 
 
 async def get_backtest_result(backtest_id: str) -> Optional[dict]:
-    """按 ID 获取回测结果。"""
     rows = await asyncio.to_thread(
         mysql.select_where, "dex_backtest_results", {"backtest_id": backtest_id}, True
     )
@@ -242,7 +247,6 @@ async def get_backtest_result(backtest_id: str) -> Optional[dict]:
 
 
 async def get_cached_klines(cache_key: str) -> Optional[dict]:
-    """获取缓存的 K 线记录，未命中返回 None。"""
     rows = await asyncio.to_thread(
         mysql.execute_sql,
         "SELECT data_json, fetched_at FROM dex_kline_cache WHERE cache_key = %s",
@@ -250,203 +254,6 @@ async def get_cached_klines(cache_key: str) -> Optional[dict]:
         True,
     )
     return rows[0] if rows else None
-
-
-# ═══════════════════════════════════════════
-#  信号
-# ═══════════════════════════════════════════
-
-
-async def save_signal(signal: dict) -> None:
-    """保存一条交易信号。"""
-    data = {
-        "signal_id": signal.get("signal_id", ""),
-        "strategy_id": signal.get("strategy_id", ""),
-        "symbol": signal.get("symbol", ""),
-        "timeframe": signal.get("timeframe", ""),
-        "signal_type": signal.get("signal_type", ""),
-        "strength": signal.get("strength", 0.5),
-        "price_at_signal": signal.get("price_at_signal", 0),
-        "stop_loss_price": signal.get("stop_loss_price"),
-        "take_profit_price": signal.get("take_profit_price"),
-        "triggered_by": json.dumps(signal.get("triggered_by", []), ensure_ascii=False),
-        "feature_snapshot": json.dumps(signal.get("feature_snapshot", {}), ensure_ascii=False, default=str),
-        "confidence": signal.get("confidence"),
-        "ttl_seconds": signal.get("ttl_seconds"),
-        "metadata": json.dumps(signal.get("metadata", {}), ensure_ascii=False, default=str),
-    }
-    await asyncio.to_thread(mysql.upsert, data, "dex_signals")
-
-
-async def list_signals(
-    strategy_id: str = None,
-    symbol: str = None,
-    limit: int = 100,
-) -> list[dict]:
-    """查询信号列表。"""
-    conditions = []
-    params = []
-    if strategy_id:
-        conditions.append("strategy_id = %s")
-        params.append(strategy_id)
-    if symbol:
-        conditions.append("symbol = %s")
-        params.append(symbol)
-
-    where_clause = " AND ".join(conditions) if conditions else "1=1"
-    sql = f"SELECT * FROM dex_signals WHERE {where_clause} ORDER BY created_at DESC LIMIT %s"
-    params.append(limit)
-
-    rows = await asyncio.to_thread(mysql.execute_sql, sql, tuple(params), True)
-    return rows
-
-
-async def get_signal(signal_id: str) -> Optional[dict]:
-    """按 ID 获取单条信号。"""
-    rows = await asyncio.to_thread(
-        mysql.select_where, "dex_signals", {"signal_id": signal_id}, True
-    )
-    return rows[0] if rows else None
-
-
-# ═══════════════════════════════════════════
-#  交易记录
-# ═══════════════════════════════════════════
-
-
-async def save_trade(trade: dict) -> None:
-    """保存一条交易记录。"""
-    await asyncio.to_thread(mysql.upsert, trade, "dex_trades")
-
-
-async def list_trades(
-    strategy_id: str = None,
-    exchange: str = None,
-    symbol: str = None,
-    limit: int = 200,
-) -> list[dict]:
-    """查询交易记录。"""
-    conditions = []
-    params = []
-    if strategy_id:
-        conditions.append("strategy_id = %s")
-        params.append(strategy_id)
-    if exchange:
-        conditions.append("exchange = %s")
-        params.append(exchange)
-    if symbol:
-        conditions.append("symbol = %s")
-        params.append(symbol)
-
-    where_clause = " AND ".join(conditions) if conditions else "1=1"
-    sql = f"SELECT * FROM dex_trades WHERE {where_clause} ORDER BY created_at DESC LIMIT %s"
-    params.append(limit)
-
-    rows = await asyncio.to_thread(mysql.execute_sql, sql, tuple(params), True)
-    return rows
-
-
-async def get_trade(trade_id: str) -> Optional[dict]:
-    """按 ID 获取单条交易。"""
-    rows = await asyncio.to_thread(
-        mysql.select_where, "dex_trades", {"trade_id": trade_id}, True
-    )
-    return rows[0] if rows else None
-
-
-# ═══════════════════════════════════════════
-#  持仓
-# ═══════════════════════════════════════════
-
-
-async def save_position(position: dict) -> None:
-    """保存/更新持仓。"""
-    await asyncio.to_thread(mysql.upsert, position, "dex_positions")
-
-
-async def get_open_positions(
-    strategy_id: str = None,
-    exchange: str = None,
-) -> list[dict]:
-    """查询当前打开的持仓。"""
-    conditions = ["status = 'open'"]
-    params = []
-    if strategy_id:
-        conditions.append("strategy_id = %s")
-        params.append(strategy_id)
-    if exchange:
-        conditions.append("exchange = %s")
-        params.append(exchange)
-
-    where_clause = " AND ".join(conditions)
-    sql = f"SELECT * FROM dex_positions WHERE {where_clause} ORDER BY opened_at DESC"
-    rows = await asyncio.to_thread(mysql.execute_sql, sql, tuple(params) if params else None, True)
-    return rows
-
-
-async def get_position(position_id: str) -> Optional[dict]:
-    """按 ID 获取单条持仓。"""
-    rows = await asyncio.to_thread(
-        mysql.select_where, "dex_positions", {"position_id": position_id}, True
-    )
-    return rows[0] if rows else None
-
-
-async def get_position_by_key(
-    strategy_id: str, exchange: str, symbol: str, side: str
-) -> Optional[dict]:
-    """按策略+交易所+交易对+方向查找 open 持仓。"""
-    sql = (
-        "SELECT * FROM dex_positions "
-        "WHERE strategy_id = %s AND exchange = %s AND symbol = %s "
-        "AND side = %s AND status = 'open' LIMIT 1"
-    )
-    rows = await asyncio.to_thread(
-        mysql.execute_sql, sql, (strategy_id, exchange, symbol, side), True
-    )
-    return rows[0] if rows else None
-
-
-async def calc_strategy_pnl(strategy_id: str) -> dict:
-    """计算某个策略的 PnL 汇总。"""
-    sql = """
-        SELECT
-            COUNT(*) AS total_trades,
-            SUM(CASE WHEN side = 'buy' THEN quantity * price ELSE 0 END) AS total_buy_value,
-            SUM(CASE WHEN side = 'sell' THEN quantity * price ELSE 0 END) AS total_sell_value,
-            SUM(fee) AS total_fee,
-            SUM(CASE WHEN side = 'sell' THEN quantity * price ELSE -quantity * price END) AS net_value
-        FROM dex_trades
-        WHERE strategy_id = %s AND status = 'filled'
-    """
-    rows = await asyncio.to_thread(mysql.execute_sql, sql, (strategy_id,), True)
-    row = rows[0] if rows else {}
-
-    # 加上持仓的已实现 PnL
-    pos_sql = """
-        SELECT
-            COALESCE(SUM(realized_pnl), 0) AS total_realized_pnl,
-            COALESCE(SUM(total_fee), 0) AS positions_total_fee
-        FROM dex_positions
-        WHERE strategy_id = %s
-    """
-    pos_rows = await asyncio.to_thread(mysql.execute_sql, pos_sql, (strategy_id,), True)
-    pos = pos_rows[0] if pos_rows else {}
-
-    return {
-        "strategy_id": strategy_id,
-        "total_trades": row.get("total_trades", 0) or 0,
-        "total_buy_value": float(row.get("total_buy_value", 0) or 0),
-        "total_sell_value": float(row.get("total_sell_value", 0) or 0),
-        "total_fee": float(row.get("total_fee", 0) or 0),
-        "net_value": float(row.get("net_value", 0) or 0),
-        "realized_pnl": float(pos.get("total_realized_pnl", 0) or 0),
-    }
-
-
-# ═══════════════════════════════════════════
-#  K 线缓存
-# ═══════════════════════════════════════════
 
 
 async def save_kline_cache(
@@ -457,7 +264,6 @@ async def save_kline_cache(
     data_json: str,
     row_count: int,
 ) -> None:
-    """写入 K 线缓存。"""
     data = {
         "cache_key": cache_key,
         "symbol": symbol,
@@ -467,3 +273,108 @@ async def save_kline_cache(
         "row_count": row_count,
     }
     await asyncio.to_thread(mysql.upsert, data, "dex_kline_cache")
+
+
+# ═══════════════════════════════════════════
+#  信号
+# ═══════════════════════════════════════════
+
+
+async def save_signal(strategy_id: str, signal: dict) -> None:
+    signal_id = f"sig_{uuid.uuid4().hex[:12]}"
+    data = {
+        "signal_id": signal_id,
+        "strategy_id": strategy_id,
+        "timestamp": signal.get("timestamp", ""),
+        "symbol": signal.get("symbol", ""),
+        "action": signal.get("action", ""),
+        "direction": signal.get("direction", "long"),
+        "confidence": signal.get("confidence", 1.0),
+        "reason": signal.get("reason", ""),
+        "source_type": signal.get("source_type", "technical"),
+        "price_at_signal": signal.get("price_at_signal", 0),
+        "suggested_stop_loss": signal.get("suggested_stop_loss"),
+        "suggested_take_profit": signal.get("suggested_take_profit"),
+        "metadata": json.dumps(signal.get("metadata", {}), ensure_ascii=False, default=str),
+    }
+    await asyncio.to_thread(mysql.upsert, data, "dex_signals")
+
+
+async def list_signals(
+    strategy_id: str = None,
+    symbol: str = None,
+    start_date: str = None,
+    end_date: str = None,
+    limit: int = 200,
+) -> list[dict]:
+    conditions = []
+    params = []
+    if strategy_id:
+        conditions.append("strategy_id = %s")
+        params.append(strategy_id)
+    if symbol:
+        conditions.append("symbol = %s")
+        params.append(symbol)
+    if start_date:
+        conditions.append("timestamp >= %s")
+        params.append(start_date)
+    if end_date:
+        conditions.append("timestamp <= %s")
+        params.append(end_date)
+
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    sql = f"SELECT * FROM dex_signals WHERE {where_clause} ORDER BY timestamp DESC LIMIT %s"
+    params.append(limit)
+
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, tuple(params), True)
+    return rows
+
+
+# ═══════════════════════════════════════════
+#  机器码 Token & 配额
+# ═══════════════════════════════════════════
+
+
+async def get_token_by_machine_code(machine_code: str) -> Optional[dict]:
+    rows = await asyncio.to_thread(
+        mysql.select_where, "dex_machine_tokens", {"machine_code": machine_code}, True
+    )
+    return rows[0] if rows else None
+
+
+async def get_token_record(token: str) -> Optional[dict]:
+    rows = await asyncio.to_thread(
+        mysql.select_where, "dex_machine_tokens", {"token": token}, True
+    )
+    return rows[0] if rows else None
+
+
+async def create_token(machine_code: str, token: str, max_strategies: int = 3) -> None:
+    data = {
+        "machine_code": machine_code,
+        "token": token,
+        "max_strategies": max_strategies,
+        "status": "active",
+    }
+    await asyncio.to_thread(mysql.upsert, data, "dex_machine_tokens")
+
+
+async def count_strategies_by_machine(machine_code: str) -> int:
+    rows = await asyncio.to_thread(
+        mysql.execute_sql,
+        "SELECT COUNT(*) as cnt FROM dex_strategies WHERE machine_code = %s AND status != 'archived'",
+        (machine_code,),
+        True,
+    )
+    return rows[0]["cnt"] if rows else 0
+
+
+async def list_strategies_by_machine(machine_code: str) -> list[dict]:
+    rows = await asyncio.to_thread(
+        mysql.execute_sql,
+        "SELECT strategy_id, name, symbol, timeframe, version, status, created_at, updated_at "
+        "FROM dex_strategies WHERE machine_code = %s AND status != 'archived' ORDER BY updated_at DESC",
+        (machine_code,),
+        True,
+    )
+    return rows

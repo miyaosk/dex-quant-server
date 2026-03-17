@@ -1,12 +1,21 @@
-FROM python:3.12-slim
+FROM 533267002049.dkr.ecr.ap-southeast-1.amazonaws.com/base:python-3.12
+
+COPY . /app
 
 WORKDIR /app
 
-COPY requirements.txt .
+RUN apk add --no-cache \
+    libc6-compat \
+    build-base \
+    openssl-dev \
+    curl \
+    vim \
+    && rm -rf /var/cache/apk/*
+
+RUN chmod +x run.sh
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel Cython==3.1.1
+
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
-
 EXPOSE 8000
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
