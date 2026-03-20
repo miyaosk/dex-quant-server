@@ -12,7 +12,7 @@ from typing import Optional
 # MySQL 配置（与其他项目保持一致的 dict 格式）
 mysql_db = json.loads(os.getenv(
     "mysql_db",
-    '{"host": "qa-dex-tidb.djdog.ai", "port": 4000, "user": "sol-chain", "password": "sol-chian", "db": "sol"}'
+    '{"host": "ballast.proxy.rlwy.net", "port": 19702, "user": "root", "password": "GukESWyaaNLpofboNgvcNBoLStMDYQcw", "db": "railway"}'
 ))
 
 PROXY_URL: Optional[str] = os.getenv("PROXY_URL")
