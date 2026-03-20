@@ -1,22 +1,17 @@
-FROM python:3.12-alpine
-
-COPY . /app
+FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apk add --no-cache \
-    libc6-compat \
-    build-base \
-    openssl-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    vim \
-    && rm -rf /var/cache/apk/*
+    && rm -rf /var/lib/apt/lists/*
 
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
+
+COPY . .
 RUN chmod +x run.sh
-
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel Cython==3.1.1
-
-RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 8000
 
