@@ -302,6 +302,7 @@ async def save_signal(strategy_id: str, signal: dict) -> None:
 
 async def list_signals(
     strategy_id: str = None,
+    allowed_strategy_ids: list[str] = None,
     symbol: str = None,
     start_date: str = None,
     end_date: str = None,
@@ -312,6 +313,12 @@ async def list_signals(
     if strategy_id:
         conditions.append("strategy_id = %s")
         params.append(strategy_id)
+    elif allowed_strategy_ids is not None:
+        if not allowed_strategy_ids:
+            return []
+        placeholders = ",".join(["%s"] * len(allowed_strategy_ids))
+        conditions.append(f"strategy_id IN ({placeholders})")
+        params.extend(allowed_strategy_ids)
     if symbol:
         conditions.append("symbol = %s")
         params.append(symbol)

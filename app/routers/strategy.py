@@ -2,6 +2,7 @@
 策略 CRUD API — 保存脚本为核心的策略
 
 配额限制：每个 Token（机器码）最多 3 个策略
+所有接口均需 X-Token 认证，且只能操作自己的策略
 """
 
 import json
@@ -15,6 +16,16 @@ from app.models import StrategyCreate, StrategyDetail, StrategyListItem
 from app.routers.auth import validate_token
 
 router = APIRouter(prefix="/strategies", tags=["策略"])
+
+
+async def _get_owned_strategy(strategy_id: str, machine_code: str) -> dict:
+    """获取策略并校验归属，不属于当前用户则 403"""
+    row = await database.get_strategy(strategy_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"策略 {strategy_id} 不存在")
+    if row.get("machine_code") != machine_code:
+        raise HTTPException(status_code=403, detail="无权访问该策略")
+    return row
 
 
 @router.post("/", response_model=StrategyDetail)
@@ -59,9 +70,12 @@ async def create_strategy(spec: StrategyCreate, x_token: str = Header(default=""
 
 
 @router.get("/", response_model=list[StrategyListItem])
-async def list_strategies():
-    """列出所有策略"""
-    rows = await database.list_strategies()
+async def list_strategies(x_token: str = Header(default="")):
+    """列出当前用户的策略"""
+    record = await validate_token(x_token)
+    machine_code = record["machine_code"]
+
+    rows = await database.list_strategies_by_machine(machine_code)
     return [
         StrategyListItem(
             strategy_id=r["strategy_id"],
@@ -78,11 +92,10 @@ async def list_strategies():
 
 
 @router.get("/{strategy_id}", response_model=StrategyDetail)
-async def get_strategy(strategy_id: str):
-    """获取策略详情（含脚本源码）"""
-    row = await database.get_strategy(strategy_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"策略 {strategy_id} 不存在")
+async def get_strategy(strategy_id: str, x_token: str = Header(default="")):
+    """获取策略详情（含脚本源码），仅限本人策略"""
+    record = await validate_token(x_token)
+    row = await _get_owned_strategy(strategy_id, record["machine_code"])
 
     tags = []
     raw_tags = row.get("tags", "[]")
@@ -109,11 +122,10 @@ async def get_strategy(strategy_id: str):
 
 
 @router.put("/{strategy_id}", response_model=StrategyDetail)
-async def update_strategy(strategy_id: str, spec: StrategyCreate):
-    """更新策略"""
-    existing = await database.get_strategy(strategy_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail=f"策略 {strategy_id} 不存在")
+async def update_strategy(strategy_id: str, spec: StrategyCreate, x_token: str = Header(default="")):
+    """更新策略，仅限本人策略"""
+    record = await validate_token(x_token)
+    existing = await _get_owned_strategy(strategy_id, record["machine_code"])
 
     await database.save_strategy(
         strategy_id=strategy_id,
@@ -126,6 +138,7 @@ async def update_strategy(strategy_id: str, spec: StrategyCreate):
         version=spec.version,
         tags=json.dumps(spec.tags, ensure_ascii=False),
         status=existing.get("status", "draft"),
+        machine_code=record["machine_code"],
     )
     logger.info(f"策略已更新: {strategy_id}")
 

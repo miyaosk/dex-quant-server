@@ -19,7 +19,9 @@ from app.services.backtest_service import BacktestService
 from app.services.data_service import DataService
 from app import database
 from app.routers.auth import validate_token
-from app.core.script_executor import execute_strategy
+from app.core.script_executor import execute_strategy, ScriptSecurityError
+
+SCRIPT_TIMEOUT_SECONDS = 120
 
 router = APIRouter(prefix="/backtest", tags=["回测"])
 
@@ -109,13 +111,20 @@ async def run_server_backtest(req: ServerBacktestRequest, x_token: str = Header(
         )
 
     try:
-        result = await asyncio.to_thread(
-            execute_strategy,
-            script_content=script,
-            mode="backtest",
-            start_date=req.start_date,
-            end_date=req.end_date,
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                execute_strategy,
+                script_content=script,
+                mode="backtest",
+                start_date=req.start_date,
+                end_date=req.end_date,
+            ),
+            timeout=SCRIPT_TIMEOUT_SECONDS,
         )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail=f"策略脚本执行超时（{SCRIPT_TIMEOUT_SECONDS}秒）")
+    except ScriptSecurityError as e:
+        raise HTTPException(status_code=403, detail=f"脚本安全检查未通过: {e}")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -159,12 +168,24 @@ async def run_server_backtest(req: ServerBacktestRequest, x_token: str = Header(
         ds.close()
 
 
-@router.get("/{backtest_id}", response_model=BacktestResponse)
-async def get_backtest(backtest_id: str):
-    """获取已保存的回测结果"""
+async def _get_owned_backtest(backtest_id: str, machine_code: str) -> dict:
+    """获取回测结果并通过关联策略校验归属"""
     row = await database.get_backtest_result(backtest_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"回测 {backtest_id} 不存在")
+
+    strategy = await database.get_strategy(row["strategy_id"])
+    if strategy is None or strategy.get("machine_code") != machine_code:
+        raise HTTPException(status_code=403, detail="无权访问该回测结果")
+
+    return row
+
+
+@router.get("/{backtest_id}", response_model=BacktestResponse)
+async def get_backtest(backtest_id: str, x_token: str = Header(default="")):
+    """获取已保存的回测结果，仅限本人策略的回测"""
+    record = await validate_token(x_token)
+    row = await _get_owned_backtest(backtest_id, record["machine_code"])
 
     return BacktestResponse(
         backtest_id=row["backtest_id"],
@@ -182,11 +203,10 @@ async def get_backtest(backtest_id: str):
 
 
 @router.get("/{backtest_id}/trades")
-async def get_trades(backtest_id: str):
-    """获取回测交易记录"""
-    row = await database.get_backtest_result(backtest_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"回测 {backtest_id} 不存在")
+async def get_trades(backtest_id: str, x_token: str = Header(default="")):
+    """获取回测交易记录，仅限本人策略的回测"""
+    record = await validate_token(x_token)
+    row = await _get_owned_backtest(backtest_id, record["machine_code"])
 
     trades = json.loads(row["trades_json"]) if row.get("trades_json") else []
     return {
@@ -197,11 +217,10 @@ async def get_trades(backtest_id: str):
 
 
 @router.get("/{backtest_id}/equity")
-async def get_equity(backtest_id: str):
-    """获取权益曲线"""
-    row = await database.get_backtest_result(backtest_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"回测 {backtest_id} 不存在")
+async def get_equity(backtest_id: str, x_token: str = Header(default="")):
+    """获取权益曲线，仅限本人策略的回测"""
+    record = await validate_token(x_token)
+    row = await _get_owned_backtest(backtest_id, record["machine_code"])
 
     equity = json.loads(row["equity_json"]) if row.get("equity_json") else []
     return {

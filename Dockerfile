@@ -1,4 +1,4 @@
-FROM 533267002049.dkr.ecr.ap-southeast-1.amazonaws.com/base:python-3.12
+FROM python:3.12-alpine
 
 COPY . /app
 

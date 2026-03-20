@@ -1,26 +1,126 @@
 """
-策略脚本执行器 — 在服务器端安全运行用户上传的策略脚本
+策略脚本执行器 — 在沙箱中安全运行用户上传的策略脚本
 
-流程:
-  1. 接收脚本源码（字符串）
-  2. 注入服务器端的 data_client / indicators 模块
-  3. exec() 执行脚本，调用 generate_signals()
-  4. 返回信号列表
-
-安全措施:
-  - 通过 sys.modules 注入受控模块，脚本的 import 只能拿到我们提供的
-  - 执行完毕后恢复 sys.modules
-  - 超时控制由调用方负责
+安全层级:
+  1. AST 预扫描 — 拒绝包含危险 import / 属性访问的脚本
+  2. 受限 builtins — 移除 open / exec / eval / compile 等
+  3. 模块白名单 — 自定义 __import__ 只放行安全模块
+  4. sys.modules 注入 — 让脚本的 import data_client 拿到受控实例
+  5. 执行超时 — 由调用方通过 asyncio.wait_for 控制
 """
 
 from __future__ import annotations
 
+import ast
+import builtins
 import sys
 import types
 from typing import Optional
 
 from loguru import logger
 
+
+# ── 白名单 ──────────────────────────────────────────────────
+
+ALLOWED_MODULES: frozenset[str] = frozenset({
+    # 注入的受控模块
+    "data_client",
+    "indicators",
+    "strategy_runner",
+    # 安全标准库
+    "math", "cmath", "decimal", "fractions", "statistics",
+    "datetime", "time", "calendar", "zoneinfo",
+    "collections", "itertools", "functools", "operator",
+    "copy", "json", "re", "enum", "dataclasses",
+    "typing", "abc", "numbers", "string", "textwrap",
+    "bisect", "heapq", "random", "hashlib", "hmac",
+    "uuid", "pprint",
+    # 常用数据分析库（只读计算）
+    "numpy", "pandas", "ta", "talib",
+})
+
+FORBIDDEN_ATTRS: frozenset[str] = frozenset({
+    "__subclasses__", "__bases__", "__mro__",
+    "__globals__", "__code__", "__builtins__",
+    "__loader__", "__spec__",
+})
+
+DANGEROUS_BUILTINS: frozenset[str] = frozenset({
+    "open", "exec", "eval", "compile",
+    "__import__",
+    "globals", "locals", "vars",
+    "getattr", "setattr", "delattr",
+    "breakpoint", "exit", "quit", "input", "help",
+    "memoryview",
+})
+
+
+class ScriptSecurityError(Exception):
+    """脚本安全检查未通过"""
+
+
+# ── AST 预扫描 ──────────────────────────────────────────────
+
+def _audit_ast(source: str) -> None:
+    """解析脚本 AST，拒绝危险模式"""
+    try:
+        tree = ast.parse(source, filename="<strategy>")
+    except SyntaxError as e:
+        raise ScriptSecurityError(f"脚本语法错误: {e}") from e
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                _check_module(alias.name, node.lineno)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                _check_module(node.module, node.lineno)
+        elif isinstance(node, ast.Attribute):
+            if node.attr in FORBIDDEN_ATTRS:
+                raise ScriptSecurityError(
+                    f"第 {node.lineno} 行: 禁止访问属性 '{node.attr}'"
+                )
+
+
+def _check_module(module: str, lineno: int) -> None:
+    top_level = module.split(".")[0]
+    if top_level not in ALLOWED_MODULES:
+        raise ScriptSecurityError(
+            f"第 {lineno} 行: 禁止导入模块 '{module}'"
+        )
+
+
+# ── 受限 builtins ──────────────────────────────────────────
+
+_original_import = builtins.__import__
+
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """只允许白名单模块的 import"""
+    if level != 0:
+        raise ImportError("沙箱中禁止相对导入")
+    top_level = name.split(".")[0]
+    if top_level not in ALLOWED_MODULES:
+        raise ImportError(f"沙箱禁止导入模块 '{name}'")
+    return _original_import(name, globals, locals, fromlist, level)
+
+
+def _make_safe_builtins() -> dict:
+    """构造受限的 __builtins__ 字典"""
+    safe = {}
+    for name in dir(builtins):
+        if name.startswith("_") and name != "__name__":
+            continue
+        if name in DANGEROUS_BUILTINS:
+            continue
+        safe[name] = getattr(builtins, name)
+    safe["__import__"] = _safe_import
+    safe["__name__"] = "__script__"
+    safe["__build_class__"] = builtins.__build_class__
+    return safe
+
+
+# ── 主入口 ──────────────────────────────────────────────────
 
 def execute_strategy(
     script_content: str,
@@ -29,21 +129,18 @@ def execute_strategy(
     end_date: Optional[str] = None,
 ) -> dict:
     """
-    执行策略脚本的 generate_signals() 函数。
+    在沙箱中执行策略脚本的 generate_signals()。
 
-    参数:
-        script_content: 策略脚本 Python 源码
-        mode: "backtest" 或 "live"
-        start_date: 回测起始日期
-        end_date: 回测结束日期
+    安全流程:
+      1. AST 扫描 → 拒绝危险 import / 属性访问
+      2. 构造受限 builtins + 白名单 __import__
+      3. 注入 data_client / indicators / strategy_runner
+      4. exec() 在隔离 namespace 中执行
 
-    返回:
-        generate_signals() 的返回值（含 signals 列表）
-
-    异常:
-        ValueError: 脚本中没有 generate_signals 函数
-        Exception: 脚本执行错误
+    超时保护由调用方通过 asyncio.wait_for 控制。
     """
+    _audit_ast(script_content)
+
     from app.core import data_client as server_dc
     from app.core import indicators as server_ind
 
@@ -53,7 +150,6 @@ def execute_strategy(
     fake_indicators = types.ModuleType("indicators")
     fake_indicators.Indicators = server_ind.Indicators
 
-    # 注入 strategy_runner 的空壳，防止 __main__ 里的 import 报错
     fake_runner = types.ModuleType("strategy_runner")
     fake_runner.run = lambda *a, **kw: None
 
@@ -68,8 +164,15 @@ def execute_strategy(
         }[name]
 
     try:
-        namespace = {"__name__": "__script__", "__file__": "<uploaded>"}
-        exec(compile(script_content, "<strategy>", "exec"), namespace)
+        safe_builtins = _make_safe_builtins()
+        namespace = {
+            "__name__": "__script__",
+            "__file__": "<uploaded>",
+            "__builtins__": safe_builtins,
+        }
+
+        code = compile(script_content, "<strategy>", "exec")
+        exec(code, namespace)
 
         generate_fn = namespace.get("generate_signals")
         if generate_fn is None:
