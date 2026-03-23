@@ -28,6 +28,7 @@ ALLOWED_MODULES: frozenset[str] = frozenset({
     "indicators",
     "strategy_runner",
     # 安全标准库
+    "sys", "os.path",
     "math", "cmath", "decimal", "fractions", "statistics",
     "datetime", "time", "calendar", "zoneinfo",
     "collections", "itertools", "functools", "operator",
@@ -139,6 +140,12 @@ def execute_strategy(
 
     超时保护由调用方通过 asyncio.wait_for 控制。
     """
+    # 自动剥离 sys.path.insert 行（本地脚本用于导入，服务器端已注入模块不需要）
+    import re as _re
+    script_content = _re.sub(
+        r'^.*sys\.path\.insert.*$', '', script_content, flags=_re.MULTILINE
+    )
+
     _audit_ast(script_content)
 
     from app.core import data_client as server_dc
