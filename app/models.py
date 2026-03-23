@@ -215,6 +215,74 @@ class ServerBacktestRequest(BaseModel):
 # ═══════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════
+#  参数优化
+# ═══════════════════════════════════════════
+
+
+class ParamDef(BaseModel):
+    """单个参数定义。"""
+    name: str
+    type: str = Field(description="int / float / choice")
+    low: Optional[float] = None
+    high: Optional[float] = None
+    step: Optional[float] = None
+    choices: list = Field(default_factory=list)
+
+
+class OptimizeRequest(BaseModel):
+    """
+    参数优化请求 — 批量回测寻找最优参数。
+
+    脚本中用 PARAMS['xxx'] 引用参数，服务器自动替换。
+    """
+    script_content: str = Field(description="策略脚本源码，用 PARAMS['xxx'] 引用可调参数")
+    params: list[ParamDef] = Field(description="参数空间定义列表")
+    strategy_name: str = ""
+    symbol: str = "BTCUSDT"
+    timeframe: str = "4h"
+    start_date: str = Field(description="回测起始日期")
+    end_date: str = Field(description="回测结束日期")
+    initial_capital: float = 100_000.0
+    leverage: int = 3
+    fee_rate: float = 0.0005
+    slippage_bps: float = 5.0
+    margin_mode: str = "isolated"
+    direction: str = "long_short"
+    method: str = Field(default="grid", description="grid / genetic")
+    max_combinations: int = Field(default=200, description="最大组合数限制")
+    fitness_metric: str = Field(default="sharpe_ratio", description="优化目标指标")
+
+
+class OptimizeResultItem(BaseModel):
+    """单个参数组合的回测结果。"""
+    rank: int = 0
+    params: dict = Field(default_factory=dict)
+    fitness: float = 0
+    total_return_pct: float = 0
+    sharpe_ratio: float = 0
+    sortino_ratio: float = 0
+    max_drawdown_pct: float = 0
+    win_rate: float = 0
+    total_trades: int = 0
+    profit_loss_ratio: float = 0
+    final_balance: float = 0
+
+
+class OptimizeResponse(BaseModel):
+    """参数优化响应。"""
+    status: str = "completed"
+    method: str = "grid"
+    total_combinations: int = 0
+    evaluated: int = 0
+    failed: int = 0
+    best_params: dict = Field(default_factory=dict)
+    best_fitness: float = 0
+    results: list[OptimizeResultItem] = Field(default_factory=list, description="按fitness降序的Top结果")
+    elapsed_ms: int = 0
+    error: Optional[str] = None
+
+
 class MachineRegisterRequest(BaseModel):
     """机器码注册请求。"""
     machine_code: str = Field(description="客户端硬件指纹哈希")

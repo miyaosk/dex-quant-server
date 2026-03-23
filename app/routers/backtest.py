@@ -1,27 +1,35 @@
 """
-回测 API — 两种模式（免费无限制，不占配额）
+回测 API（免费无限制，不占配额）
 
   1. POST /run         — 客户端传信号，服务器回测
   2. POST /run-server  — 客户端传脚本，服务器执行脚本+回测（一站式，推荐）
+  3. POST /optimize    — 参数优化：批量回测寻找最优参数组合
 
 需要 X-Token 头认证，但不消耗配额
 """
 
 import asyncio
 import json
+import re
+import time
 
 from fastapi import APIRouter, Header, HTTPException
 from loguru import logger
 
 from app import config
-from app.models import BacktestRequest, BacktestResponse, ServerBacktestRequest
+from app.models import (
+    BacktestRequest, BacktestResponse, ServerBacktestRequest,
+    OptimizeRequest, OptimizeResponse, OptimizeResultItem,
+)
 from app.services.backtest_service import BacktestService
 from app.services.data_service import DataService
 from app import database
 from app.routers.auth import validate_token
 from app.core.script_executor import execute_strategy, ScriptSecurityError
+from app.core.optimizer import ParameterSpace, GridSearch, GeneticOptimizer
 
 SCRIPT_TIMEOUT_SECONDS = 120
+OPTIMIZE_SCRIPT_TIMEOUT = 60
 
 router = APIRouter(prefix="/backtest", tags=["回测"])
 
@@ -166,6 +174,185 @@ async def run_server_backtest(req: ServerBacktestRequest, x_token: str = Header(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         ds.close()
+
+
+@router.post("/optimize", response_model=OptimizeResponse)
+async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default="")):
+    """
+    参数优化 — 批量回测寻找最优参数组合。
+
+    脚本中定义 PARAMS 字典引用可调参数，服务器自动替换并逐一回测。
+    支持网格搜索（grid）和遗传算法（genetic）。
+    """
+    await validate_token(x_token)
+
+    start_ts = time.time()
+
+    space = ParameterSpace()
+    for p in req.params:
+        if p.type == "int":
+            space.add_int(p.name, int(p.low), int(p.high), int(p.step or 1))
+        elif p.type == "float":
+            space.add_float(p.name, p.low, p.high, p.step)
+        elif p.type == "choice":
+            space.add_choice(p.name, p.choices)
+
+    grid = space.get_grid()
+    if len(grid) > req.max_combinations:
+        raise HTTPException(
+            status_code=400,
+            detail=f"参数组合数 {len(grid)} 超过上限 {req.max_combinations}，"
+                   f"请缩小参数范围或增大 step",
+        )
+
+    logger.info(f"参数优化开始 | 方法={req.method} | 组合数={len(grid)} | {req.symbol} {req.timeframe}")
+
+    all_results: list[dict] = []
+    failed_count = 0
+
+    def _run_single(params: dict) -> float:
+        nonlocal failed_count
+        injected_script = _inject_params(req.script_content, params)
+        try:
+            sig_result = execute_strategy(
+                script_content=injected_script,
+                mode="backtest",
+                start_date=req.start_date,
+                end_date=req.end_date,
+            )
+        except Exception as e:
+            logger.warning(f"脚本执行失败 params={params}: {e}")
+            failed_count += 1
+            return float("-inf")
+
+        signals = sig_result.get("signals", [])
+        if not signals:
+            failed_count += 1
+            return float("-inf")
+
+        return signals
+
+    ds = DataService(proxy=config.PROXY_URL)
+    try:
+        df = await ds.get_klines(
+            symbol=req.symbol,
+            interval=req.timeframe,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            market="crypto_futures",
+        )
+    except Exception as e:
+        ds.close()
+        raise HTTPException(status_code=500, detail=f"拉取K线失败: {e}")
+
+    if df.empty:
+        ds.close()
+        raise HTTPException(status_code=400, detail="未获取到K线数据")
+
+    from app.core.backtest_engine import run_backtest as _run_bt
+
+    bt_config = {
+        "symbol": req.symbol,
+        "initial_capital": req.initial_capital,
+        "leverage": req.leverage,
+        "fee_rate": req.fee_rate,
+        "slippage_bps": req.slippage_bps,
+        "margin_mode": req.margin_mode,
+        "direction": req.direction,
+        "risk_per_trade": 0.02,
+    }
+
+    for i, params in enumerate(grid):
+        injected_script = _inject_params(req.script_content, params)
+        try:
+            sig_result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    execute_strategy,
+                    script_content=injected_script,
+                    mode="backtest",
+                    start_date=req.start_date,
+                    end_date=req.end_date,
+                ),
+                timeout=OPTIMIZE_SCRIPT_TIMEOUT,
+            )
+            signals = sig_result.get("signals", [])
+            if not signals:
+                failed_count += 1
+                continue
+
+            bt_result = _run_bt(df=df, signals=signals, config=bt_config)
+            metrics = bt_result.get("metrics", {})
+
+            fitness = metrics.get(req.fitness_metric, 0)
+            if isinstance(fitness, (int, float)) and fitness != fitness:
+                fitness = 0
+
+            all_results.append({
+                "params": params,
+                "fitness": fitness,
+                "metrics": metrics,
+            })
+
+        except Exception as e:
+            logger.warning(f"[{i+1}/{len(grid)}] 优化失败 params={params}: {e}")
+            failed_count += 1
+            continue
+
+        if (i + 1) % max(1, len(grid) // 5) == 0:
+            logger.info(f"优化进度 [{i+1}/{len(grid)}]")
+
+    ds.close()
+
+    all_results.sort(key=lambda x: x["fitness"], reverse=True)
+
+    top_results = []
+    for rank, r in enumerate(all_results[:20], 1):
+        m = r["metrics"]
+        top_results.append(OptimizeResultItem(
+            rank=rank,
+            params=r["params"],
+            fitness=r["fitness"],
+            total_return_pct=m.get("total_return_pct", 0),
+            sharpe_ratio=m.get("sharpe_ratio", 0),
+            sortino_ratio=m.get("sortino_ratio", 0),
+            max_drawdown_pct=m.get("max_drawdown_pct", 0),
+            win_rate=m.get("win_rate", 0),
+            total_trades=m.get("total_trades", 0),
+            profit_loss_ratio=m.get("profit_loss_ratio", 0),
+            final_balance=m.get("final_balance", 0),
+        ))
+
+    elapsed_ms = int((time.time() - start_ts) * 1000)
+    best = all_results[0] if all_results else {}
+
+    logger.info(
+        f"参数优化完成 | 评估={len(all_results)} 失败={failed_count} | "
+        f"最优fitness={best.get('fitness', 0):.4f} | 耗时={elapsed_ms}ms"
+    )
+
+    return OptimizeResponse(
+        status="completed",
+        method=req.method,
+        total_combinations=len(grid),
+        evaluated=len(all_results),
+        failed=failed_count,
+        best_params=best.get("params", {}),
+        best_fitness=best.get("fitness", 0),
+        results=top_results,
+        elapsed_ms=elapsed_ms,
+    )
+
+
+def _inject_params(script: str, params: dict) -> str:
+    """将 PARAMS 字典注入到脚本头部。"""
+    params_line = f"PARAMS = {repr(params)}\n"
+    if "PARAMS" in script:
+        script = re.sub(r'^PARAMS\s*=\s*\{[^}]*\}', params_line.strip(), script, count=1, flags=re.MULTILINE)
+        if params_line.strip() not in script:
+            script = params_line + script
+    else:
+        script = params_line + script
+    return script
 
 
 async def _get_owned_backtest(backtest_id: str, machine_code: str) -> dict:
