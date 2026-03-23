@@ -464,9 +464,10 @@ def run_backtest(
     )
 
     # 将信号按时间戳索引，支持同一时刻多个信号
+    # 标准化时间戳：统一转为 "YYYY-MM-DD HH:MM:SS" 格式匹配，避免格式差异导致匹配失败
     signal_map: dict[str, list[dict]] = {}
     for sig in signals:
-        ts = sig.get("timestamp", "")
+        ts = _normalize_ts(sig.get("timestamp", ""))
         if ts not in signal_map:
             signal_map[ts] = []
         signal_map[ts].append(sig)
@@ -478,14 +479,15 @@ def run_backtest(
     for idx in range(len(df)):
         row = df.iloc[idx]
         dt_str = str(row["datetime"])
+        dt_key = _normalize_ts(dt_str)
         close = float(row["close"])
         high = float(row["high"])
         low = float(row["low"])
 
         pos = engine.account.get_position(symbol)
 
-        # 查找当前 bar 是否有信号
-        bar_signals = signal_map.get(dt_str, [])
+        # 查找当前 bar 是否有信号（用标准化的时间戳匹配）
+        bar_signals = signal_map.get(dt_key, [])
 
         for sig in bar_signals:
             action = sig.get("action", "").lower()
@@ -629,6 +631,29 @@ def run_backtest(
         "trades": formatted_trades,
         "equity_curve": equity_curve_out,
     }
+
+
+def _normalize_ts(ts: str) -> str:
+    """
+    将各种时间戳格式统一为 'YYYY-MM-DD HH:MM:SS' 用于匹配。
+    处理: ISO 8601 (T分隔), 带时区(+00:00/Z), pandas Timestamp 等。
+    """
+    if not ts:
+        return ""
+    s = str(ts).strip()
+    s = s.replace("T", " ")
+    # 去掉时区后缀
+    if s.endswith("Z"):
+        s = s[:-1]
+    for tz_suffix in ("+00:00", "+0000", "-00:00", "-0000"):
+        if s.endswith(tz_suffix):
+            s = s[:-len(tz_suffix)]
+            break
+    # 去掉毫秒/微秒
+    dot_pos = s.rfind(".")
+    if dot_pos > 0:
+        s = s[:dot_pos]
+    return s.strip()
 
 
 def _calc_position_size(
