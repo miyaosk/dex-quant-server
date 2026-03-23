@@ -1,9 +1,10 @@
 """
 回测 API（免费无限制，不占配额）
 
-  1. POST /run         — 客户端传信号，服务器回测
-  2. POST /run-server  — 客户端传脚本，服务器执行脚本+回测（一站式，推荐）
-  3. POST /optimize    — 参数优化：批量回测寻找最优参数组合
+  1. POST /run              — 客户端传信号，服务器回测
+  2. POST /run-server       — 客户端传脚本，服务器执行脚本+回测（一站式，推荐）
+  3. POST /optimize         — 参数优化：提交异步任务，返回 job_id
+  4. GET  /optimize/{job_id} — 查询优化进度和结果
 
 需要 X-Token 头认证，但不消耗配额
 """
@@ -12,6 +13,8 @@ import asyncio
 import json
 import re
 import time
+import uuid
+import threading
 
 from fastapi import APIRouter, Header, HTTPException
 from loguru import logger
@@ -30,6 +33,9 @@ from app.core.optimizer import ParameterSpace, GridSearch, GeneticOptimizer
 
 SCRIPT_TIMEOUT_SECONDS = 120
 OPTIMIZE_SCRIPT_TIMEOUT = 60
+
+# 内存中的优化任务状态（进程级别，Railway 单实例足够）
+_optimize_jobs: dict[str, dict] = {}
 
 router = APIRouter(prefix="/backtest", tags=["回测"])
 
@@ -176,17 +182,14 @@ async def run_server_backtest(req: ServerBacktestRequest, x_token: str = Header(
         ds.close()
 
 
-@router.post("/optimize", response_model=OptimizeResponse)
+@router.post("/optimize")
 async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default="")):
     """
-    参数优化 — 批量回测寻找最优参数组合。
+    提交参数优化任务（异步）。
 
-    脚本中定义 PARAMS 字典引用可调参数，服务器自动替换并逐一回测。
-    支持网格搜索（grid）和遗传算法（genetic）。
+    立即返回 job_id，后台执行。通过 GET /optimize/{job_id} 轮询进度和结果。
     """
     await validate_token(x_token)
-
-    start_ts = time.time()
 
     space = ParameterSpace()
     for p in req.params:
@@ -201,36 +204,76 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
     if len(grid) > req.max_combinations:
         raise HTTPException(
             status_code=400,
-            detail=f"参数组合数 {len(grid)} 超过上限 {req.max_combinations}，"
-                   f"请缩小参数范围或增大 step",
+            detail=f"参数组合数 {len(grid)} 超过上限 {req.max_combinations}，请缩小参数范围或增大 step",
         )
 
-    logger.info(f"参数优化开始 | 方法={req.method} | 组合数={len(grid)} | {req.symbol} {req.timeframe}")
+    job_id = f"opt_{uuid.uuid4().hex[:12]}"
+    _optimize_jobs[job_id] = {
+        "status": "running",
+        "total": len(grid),
+        "completed": 0,
+        "failed": 0,
+        "current_best_fitness": 0,
+        "current_best_params": {},
+        "elapsed_ms": 0,
+        "results": [],
+        "start_ts": time.time(),
+    }
 
-    all_results: list[dict] = []
-    failed_count = 0
+    logger.info(f"[{job_id}] 优化任务已提交 | 组合数={len(grid)} | {req.symbol} {req.timeframe}")
 
-    def _run_single(params: dict) -> float:
-        nonlocal failed_count
-        injected_script = _inject_params(req.script_content, params)
-        try:
-            sig_result = execute_strategy(
-                script_content=injected_script,
-                mode="backtest",
-                start_date=req.start_date,
-                end_date=req.end_date,
-            )
-        except Exception as e:
-            logger.warning(f"脚本执行失败 params={params}: {e}")
-            failed_count += 1
-            return float("-inf")
+    asyncio.create_task(_run_optimize_job(job_id, req, grid))
 
-        signals = sig_result.get("signals", [])
-        if not signals:
-            failed_count += 1
-            return float("-inf")
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "total_combinations": len(grid),
+        "message": f"优化任务已提交，共 {len(grid)} 种参数组合。请用 GET /backtest/optimize/{job_id} 查询进度。",
+    }
 
-        return signals
+
+@router.get("/optimize/{job_id}")
+async def get_optimize_progress(job_id: str, x_token: str = Header(default="")):
+    """
+    查询优化任务进度。
+
+    返回当前进度、已完成数、当前最优参数。任务完成后返回完整结果。
+    """
+    await validate_token(x_token)
+
+    job = _optimize_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"优化任务 {job_id} 不存在")
+
+    elapsed_ms = int((time.time() - job["start_ts"]) * 1000) if job["status"] == "running" else job["elapsed_ms"]
+    progress_pct = (job["completed"] / job["total"] * 100) if job["total"] > 0 else 0
+
+    response = {
+        "job_id": job_id,
+        "status": job["status"],
+        "total": job["total"],
+        "completed": job["completed"],
+        "failed": job["failed"],
+        "progress_pct": round(progress_pct, 1),
+        "current_best_fitness": job["current_best_fitness"],
+        "current_best_params": job["current_best_params"],
+        "elapsed_ms": elapsed_ms,
+    }
+
+    if job["status"] == "completed":
+        response["best_params"] = job["current_best_params"]
+        response["best_fitness"] = job["current_best_fitness"]
+        response["results"] = job["results"]
+
+    if job["status"] == "failed":
+        response["error"] = job.get("error", "")
+
+    return response
+
+
+async def _run_optimize_job(job_id: str, req: OptimizeRequest, grid: list[dict]):
+    """后台执行优化任务，实时更新进度。"""
+    job = _optimize_jobs[job_id]
 
     ds = DataService(proxy=config.PROXY_URL)
     try:
@@ -242,12 +285,18 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
             market="crypto_futures",
         )
     except Exception as e:
+        job["status"] = "failed"
+        job["error"] = f"拉取K线失败: {e}"
+        job["elapsed_ms"] = int((time.time() - job["start_ts"]) * 1000)
         ds.close()
-        raise HTTPException(status_code=500, detail=f"拉取K线失败: {e}")
+        return
 
     if df.empty:
+        job["status"] = "failed"
+        job["error"] = "未获取到K线数据"
+        job["elapsed_ms"] = int((time.time() - job["start_ts"]) * 1000)
         ds.close()
-        raise HTTPException(status_code=400, detail="未获取到K线数据")
+        return
 
     from app.core.backtest_engine import run_backtest as _run_bt
 
@@ -261,6 +310,8 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
         "direction": req.direction,
         "risk_per_trade": 0.02,
     }
+
+    all_results: list[dict] = []
 
     for i, params in enumerate(grid):
         injected_script = _inject_params(req.script_content, params)
@@ -277,7 +328,8 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
             )
             signals = sig_result.get("signals", [])
             if not signals:
-                failed_count += 1
+                job["failed"] += 1
+                job["completed"] += 1
                 continue
 
             bt_result = _run_bt(df=df, signals=signals, config=bt_config)
@@ -293,13 +345,21 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
                 "metrics": metrics,
             })
 
-        except Exception as e:
-            logger.warning(f"[{i+1}/{len(grid)}] 优化失败 params={params}: {e}")
-            failed_count += 1
-            continue
+            if fitness > job["current_best_fitness"]:
+                job["current_best_fitness"] = fitness
+                job["current_best_params"] = params.copy()
 
-        if (i + 1) % max(1, len(grid) // 5) == 0:
-            logger.info(f"优化进度 [{i+1}/{len(grid)}]")
+        except Exception as e:
+            logger.warning(f"[{job_id}][{i+1}/{len(grid)}] 失败 params={params}: {e}")
+            job["failed"] += 1
+
+        job["completed"] += 1
+
+        if (i + 1) % max(1, len(grid) // 10) == 0:
+            logger.info(
+                f"[{job_id}] 进度 {i+1}/{len(grid)} | "
+                f"当前最优 fitness={job['current_best_fitness']:.4f}"
+            )
 
     ds.close()
 
@@ -308,38 +368,27 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
     top_results = []
     for rank, r in enumerate(all_results[:20], 1):
         m = r["metrics"]
-        top_results.append(OptimizeResultItem(
-            rank=rank,
-            params=r["params"],
-            fitness=r["fitness"],
-            total_return_pct=m.get("total_return_pct", 0),
-            sharpe_ratio=m.get("sharpe_ratio", 0),
-            sortino_ratio=m.get("sortino_ratio", 0),
-            max_drawdown_pct=m.get("max_drawdown_pct", 0),
-            win_rate=m.get("win_rate", 0),
-            total_trades=m.get("total_trades", 0),
-            profit_loss_ratio=m.get("profit_loss_ratio", 0),
-            final_balance=m.get("final_balance", 0),
-        ))
+        top_results.append({
+            "rank": rank,
+            "params": r["params"],
+            "fitness": r["fitness"],
+            "total_return_pct": m.get("total_return_pct", 0),
+            "sharpe_ratio": m.get("sharpe_ratio", 0),
+            "sortino_ratio": m.get("sortino_ratio", 0),
+            "max_drawdown_pct": m.get("max_drawdown_pct", 0),
+            "win_rate": m.get("win_rate", 0),
+            "total_trades": m.get("total_trades", 0),
+            "profit_loss_ratio": m.get("profit_loss_ratio", 0),
+            "final_balance": m.get("final_balance", 0),
+        })
 
-    elapsed_ms = int((time.time() - start_ts) * 1000)
-    best = all_results[0] if all_results else {}
+    job["status"] = "completed"
+    job["results"] = top_results
+    job["elapsed_ms"] = int((time.time() - job["start_ts"]) * 1000)
 
     logger.info(
-        f"参数优化完成 | 评估={len(all_results)} 失败={failed_count} | "
-        f"最优fitness={best.get('fitness', 0):.4f} | 耗时={elapsed_ms}ms"
-    )
-
-    return OptimizeResponse(
-        status="completed",
-        method=req.method,
-        total_combinations=len(grid),
-        evaluated=len(all_results),
-        failed=failed_count,
-        best_params=best.get("params", {}),
-        best_fitness=best.get("fitness", 0),
-        results=top_results,
-        elapsed_ms=elapsed_ms,
+        f"[{job_id}] 优化完成 | 评估={len(all_results)} 失败={job['failed']} | "
+        f"最优fitness={job['current_best_fitness']:.4f} | 耗时={job['elapsed_ms']}ms"
     )
 
 
