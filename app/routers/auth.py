@@ -5,8 +5,7 @@
   1. 客户端首次使用时生成 machine_code（硬件指纹哈希）
   2. POST /auth/register 注册 → 获得 token
   3. 后续请求通过 X-Token 头携带 token
-  4. 免费配额: 每个 token 可在 Server 上运行 3 个策略
-  5. 超出配额 → 需在本地运行策略脚本
+  4. 回测免费无限制，配额仅限制「定时监控任务」数量（免费 3 个）
 """
 
 import uuid

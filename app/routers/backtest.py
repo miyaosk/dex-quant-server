@@ -1,10 +1,10 @@
 """
-回测 API — 两种模式
+回测 API — 两种模式（免费无限制，不占配额）
 
   1. POST /run         — 客户端传信号，服务器回测
-  2. POST /run-server  — 客户端传脚本，服务器执行脚本+回测（一站式）
+  2. POST /run-server  — 客户端传脚本，服务器执行脚本+回测（一站式，推荐）
 
-需要 X-Token 头认证
+需要 X-Token 头认证，但不消耗配额
 """
 
 import asyncio

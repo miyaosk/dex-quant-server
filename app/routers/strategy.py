@@ -1,7 +1,8 @@
 """
 策略 CRUD API — 保存脚本为核心的策略
 
-配额限制：每个 Token（机器码）最多 3 个策略
+配额限制：每个 Token（机器码）最多 3 个「定时监控任务」
+回测不占配额，可无限次调用
 所有接口均需 X-Token 认证，且只能操作自己的策略
 """
 
@@ -45,8 +46,8 @@ async def create_strategy(spec: StrategyCreate, x_token: str = Header(default=""
     if used >= max_strategies:
         raise HTTPException(
             status_code=403,
-            detail=f"已达到免费策略上限（{max_strategies}个），"
-                   f"请在本地运行策略脚本，或联系我们升级配额",
+            detail=f"已达到免费监控任务上限（{max_strategies}个），"
+                   f"回测不受此限制可随时使用，如需更多监控配额请联系我们升级",
         )
 
     strategy_id = f"strat_{uuid.uuid4().hex[:12]}"
