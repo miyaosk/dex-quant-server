@@ -30,7 +30,7 @@ pip install -r requirements.txt
 echo "=== 4. 配置环境变量 ==="
 if [ ! -f .env ]; then
     cat > .env << 'ENVEOF'
-mysql_db={"host": "ballast.proxy.rlwy.net", "port": 19702, "user": "root", "password": "GukESWyaaNLpofboNgvcNBoLStMDYQcw", "db": "railway"}
+mysql_db={"host": "rm-gs56sqlmm8w52jn89.mysql.singapore.rds.aliyuncs.com", "port": 3306, "user": "app_admin", "password": ")8aX0FiCwDdPgEny", "db": "dex_quant"}
 ENVEOF
     echo ".env 文件已创建，请根据需要修改数据库配置"
 else
