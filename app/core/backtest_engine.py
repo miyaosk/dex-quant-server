@@ -242,7 +242,7 @@ class BacktestEngine:
 
         margin_released = pos.margin * (close_qty / pos.quantity)
         pos.margin -= margin_released
-        self.account.balance += margin_released + realized_pnl - commission
+        self.account.balance += realized_pnl - commission
         self.account.total_commission += commission
         self.account.total_slippage_cost += abs(slippage * close_qty)
 
@@ -251,6 +251,7 @@ class BacktestEngine:
             pos.quantity = 0
             pos.side = "none"
             pos.margin = 0
+            pos.unrealized_pnl = 0
             pos.stop_loss = None
             pos.take_profit = None
 
