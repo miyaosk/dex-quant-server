@@ -476,14 +476,23 @@ def run_backtest(
             signal_map[ts] = []
         signal_map[ts].append(sig)
 
+    if signals:
+        sample_sig_ts = _normalize_ts(signals[0].get("timestamp", ""))
+        sample_bar_ts = _normalize_ts(df.iloc[0]["datetime"]) if len(df) > 0 else ""
+        logger.debug(
+            f"时间戳匹配诊断 | 信号样例={signals[0].get('timestamp','')}→{sample_sig_ts} | "
+            f"K线样例={df.iloc[0]['datetime'] if len(df) > 0 else ''}→{sample_bar_ts} | "
+            f"信号keys={len(signal_map)} barKeys前5={[_normalize_ts(df.iloc[i]['datetime']) for i in range(min(5, len(df)))]}"
+        )
+
     holding_bars: list[int] = []
     current_hold_start: int = -1
     signals_executed = 0
 
     for idx in range(len(df)):
         row = df.iloc[idx]
+        dt_key = _normalize_ts(row["datetime"])
         dt_str = str(row["datetime"])
-        dt_key = _normalize_ts(dt_str)
         close = float(row["close"])
         high = float(row["high"])
         low = float(row["low"])
@@ -660,23 +669,44 @@ def _sanitize_floats(d: dict) -> dict:
     return clean
 
 
-def _normalize_ts(ts: str) -> str:
+def _normalize_ts(ts) -> str:
     """
-    将各种时间戳格式统一为 'YYYY-MM-DD HH:MM:SS' 用于匹配。
-    处理: ISO 8601 (T分隔), 带时区(+00:00/Z), pandas Timestamp 等。
+    将各种时间戳格式统一为 epoch 秒字符串用于匹配。
+    支持: pandas Timestamp, ISO 8601, 带时区, epoch ms/s, 任意字符串日期。
     """
-    if not ts:
+    if ts is None:
         return ""
+
+    if hasattr(ts, 'timestamp'):
+        return str(int(ts.timestamp()))
+
     s = str(ts).strip()
+    if not s:
+        return ""
+
+    if s.replace(".", "").replace("-", "").isdigit() and len(s) >= 10:
+        try:
+            num = float(s)
+            if num > 1e12:
+                return str(int(num / 1000))
+            return str(int(num))
+        except ValueError:
+            pass
+
+    try:
+        import pandas as _pd
+        dt = _pd.to_datetime(s, utc=True)
+        return str(int(dt.timestamp()))
+    except Exception:
+        pass
+
     s = s.replace("T", " ")
-    # 去掉时区后缀
     if s.endswith("Z"):
         s = s[:-1]
-    for tz_suffix in ("+00:00", "+0000", "-00:00", "-0000"):
+    for tz_suffix in ("+00:00", "+0000", "-00:00", "-0000", "+08:00"):
         if s.endswith(tz_suffix):
             s = s[:-len(tz_suffix)]
             break
-    # 去掉毫秒/微秒
     dot_pos = s.rfind(".")
     if dot_pos > 0:
         s = s[:dot_pos]
