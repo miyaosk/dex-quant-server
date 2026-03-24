@@ -357,6 +357,15 @@ class DataClient:
                     "volume_usd"]].reset_index(drop=True)
 
     # ════════════════════════════════════════
+    #  别名兼容（AI 常用的错误方法名）
+    # ════════════════════════════════════════
+
+    get_ohlcv = get_perp_klines
+    get_klines = get_perp_klines
+    get_candles = get_perp_klines
+    fetch_ohlcv = get_perp_klines
+
+    # ════════════════════════════════════════
     #  Hyperliquid — 永续合约
     # ════════════════════════════════════════
 
