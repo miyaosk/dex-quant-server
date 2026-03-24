@@ -378,13 +378,17 @@ class BacktestEngine:
         if eq_df.empty:
             return {"error": "无回测数据"}
 
-        equities = eq_df["equity"].values
-        peak = np.maximum.accumulate(equities)
-        drawdowns = (equities - peak) / peak
+        equities = eq_df["equity"].values.astype(float)
+        equities = np.where(np.isfinite(equities), equities, 0.0)
+        peak = np.maximum.accumulate(np.maximum(equities, 1e-10))
+        drawdowns = np.where(peak > 0, (equities - peak) / peak, 0.0)
 
-        returns = np.diff(equities) / equities[:-1] if len(equities) > 1 else np.array([0])
+        prev = equities[:-1] if len(equities) > 1 else np.array([1.0])
+        prev = np.where(prev != 0, prev, 1e-10)
+        returns = np.diff(equities) / prev if len(equities) > 1 else np.array([0.0])
+        returns = np.where(np.isfinite(returns), returns, 0.0)
 
-        total_return = (equities[-1] / equities[0]) - 1
+        total_return = (equities[-1] / max(equities[0], 1e-10)) - 1
         n_days = len(equities)
         annual_return = (1 + total_return) ** (365 / max(n_days, 1)) - 1
         volatility = float(np.std(returns) * np.sqrt(365)) if len(returns) > 1 else 0
@@ -626,11 +630,34 @@ def run_backtest(
         "signals_executed": signals_executed,
     }
 
+    metrics = _sanitize_floats(metrics)
+    formatted_trades = [_sanitize_floats(t) for t in formatted_trades]
+    equity_curve_out = [_sanitize_floats(e) for e in equity_curve_out]
+
     return {
         "metrics": metrics,
         "trades": formatted_trades,
         "equity_curve": equity_curve_out,
     }
+
+
+def _sanitize_floats(d: dict) -> dict:
+    """将 dict 中所有 NaN/Inf/numpy 类型转为 JSON 安全值。"""
+    clean = {}
+    for k, v in d.items():
+        if isinstance(v, float):
+            if v != v or v == float("inf") or v == float("-inf"):
+                clean[k] = 0.0
+            else:
+                clean[k] = v
+        elif isinstance(v, (np.floating, np.integer)):
+            fv = float(v)
+            clean[k] = 0.0 if (fv != fv or fv == float("inf") or fv == float("-inf")) else fv
+        elif isinstance(v, np.bool_):
+            clean[k] = bool(v)
+        else:
+            clean[k] = v
+    return clean
 
 
 def _normalize_ts(ts: str) -> str:
