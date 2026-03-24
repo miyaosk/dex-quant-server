@@ -480,16 +480,21 @@ def run_backtest(
     matched = sum(1 for k in signal_map if k in bar_keys)
 
     if signals and matched == 0 and len(df) > 0:
-        all_are_indices = all(
-            str(sig.get("timestamp", "")).strip().isdigit()
-            and int(str(sig.get("timestamp", "")).strip()) < len(df)
-            for sig in signals
-        )
+        def _parse_index(ts_val) -> int:
+            """尝试将 timestamp 解析为行号（支持 int/float/str）"""
+            try:
+                n = int(float(str(ts_val).strip()))
+                return n if 0 <= n < len(df) else -1
+            except (ValueError, TypeError):
+                return -1
+
+        indices = [_parse_index(sig.get("timestamp", "")) for sig in signals]
+        all_are_indices = all(i >= 0 for i in indices)
+
         if all_are_indices:
-            logger.warning("信号 timestamp 是行号而非日期，自动映射到 K 线 datetime")
+            logger.warning(f"信号 timestamp 是行号而非日期（样例: {indices[:3]}），自动映射到 K 线 datetime")
             signal_map = {}
-            for sig in signals:
-                row_idx = int(str(sig["timestamp"]).strip())
+            for sig, row_idx in zip(signals, indices):
                 real_ts = _normalize_ts(df.iloc[row_idx]["datetime"])
                 if real_ts not in signal_map:
                     signal_map[real_ts] = []
