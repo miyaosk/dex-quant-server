@@ -109,8 +109,11 @@ class DataClient:
         start_date: str = None,
         end_date: str = None,
         limit: int = 1500,
+        timeframe: str = None,
+        period: str = None,
     ) -> pd.DataFrame:
         """永续合约 K 线。自动分页拉取完整历史。"""
+        interval = timeframe or period or interval
         bn_symbol = _symbol_to_binance(symbol)
         all_rows: list = []
         params: dict = {
@@ -321,8 +324,11 @@ class DataClient:
         start_date: str = None,
         end_date: str = None,
         limit: int = 1000,
+        timeframe: str = None,
+        period: str = None,
     ) -> pd.DataFrame:
         """现货 K 线。自动分页，无限历史。"""
+        interval = timeframe or period or interval
         bn_symbol = _symbol_to_binance(symbol)
         all_rows: list = []
         params: dict = {"symbol": bn_symbol, "interval": interval, "limit": limit}
