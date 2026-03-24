@@ -476,13 +476,32 @@ def run_backtest(
             signal_map[ts] = []
         signal_map[ts].append(sig)
 
+    bar_keys = set(_normalize_ts(df.iloc[i]["datetime"]) for i in range(len(df)))
+    matched = sum(1 for k in signal_map if k in bar_keys)
+
+    if signals and matched == 0 and len(df) > 0:
+        all_are_indices = all(
+            str(sig.get("timestamp", "")).strip().isdigit()
+            and int(str(sig.get("timestamp", "")).strip()) < len(df)
+            for sig in signals
+        )
+        if all_are_indices:
+            logger.warning("信号 timestamp 是行号而非日期，自动映射到 K 线 datetime")
+            signal_map = {}
+            for sig in signals:
+                row_idx = int(str(sig["timestamp"]).strip())
+                real_ts = _normalize_ts(df.iloc[row_idx]["datetime"])
+                if real_ts not in signal_map:
+                    signal_map[real_ts] = []
+                signal_map[real_ts].append(sig)
+            matched = sum(1 for k in signal_map if k in bar_keys)
+
     if signals:
-        sample_sig_ts = _normalize_ts(signals[0].get("timestamp", ""))
-        sample_bar_ts = _normalize_ts(df.iloc[0]["datetime"]) if len(df) > 0 else ""
-        logger.debug(
-            f"时间戳匹配诊断 | 信号样例={signals[0].get('timestamp','')}→{sample_sig_ts} | "
-            f"K线样例={df.iloc[0]['datetime'] if len(df) > 0 else ''}→{sample_bar_ts} | "
-            f"信号keys={len(signal_map)} barKeys前5={[_normalize_ts(df.iloc[i]['datetime']) for i in range(min(5, len(df)))]}"
+        sample_sig_ts = list(signal_map.keys())[:3] if signal_map else []
+        sample_bar_ts = [_normalize_ts(df.iloc[i]["datetime"]) for i in range(min(3, len(df)))]
+        logger.info(
+            f"时间戳匹配 | 信号={len(signals)} 唯一key={len(signal_map)} 命中K线={matched} | "
+            f"信号样例={sample_sig_ts} K线样例={sample_bar_ts}"
         )
 
     holding_bars: list[int] = []
