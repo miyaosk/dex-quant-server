@@ -480,26 +480,32 @@ def run_backtest(
     matched = sum(1 for k in signal_map if k in bar_keys)
 
     if signals and matched == 0 and len(df) > 0:
-        def _parse_index(ts_val) -> int:
-            """尝试将 timestamp 解析为行号（支持 int/float/str）"""
+        raw_samples = [sig.get("timestamp", "") for sig in signals[:5]]
+        logger.debug(f"行号检测开始 | raw_timestamps前5={raw_samples} types={[type(t).__name__ for t in raw_samples]}")
+
+        remapped_count = 0
+        new_signal_map: dict[str, list[dict]] = {}
+        for sig in signals:
+            ts_val = sig.get("timestamp", "")
             try:
-                n = int(float(str(ts_val).strip()))
-                return n if 0 <= n < len(df) else -1
+                n = int(float(str(ts_val).strip())) if str(ts_val).strip() else -1
             except (ValueError, TypeError):
-                return -1
+                n = -1
+            if 0 <= n < len(df):
+                real_ts = _normalize_ts(df.iloc[n]["datetime"])
+                if real_ts not in new_signal_map:
+                    new_signal_map[real_ts] = []
+                new_signal_map[real_ts].append(sig)
+                remapped_count += 1
 
-        indices = [_parse_index(sig.get("timestamp", "")) for sig in signals]
-        all_are_indices = all(i >= 0 for i in indices)
-
-        if all_are_indices:
-            logger.warning(f"信号 timestamp 是行号而非日期（样例: {indices[:3]}），自动映射到 K 线 datetime")
-            signal_map = {}
-            for sig, row_idx in zip(signals, indices):
-                real_ts = _normalize_ts(df.iloc[row_idx]["datetime"])
-                if real_ts not in signal_map:
-                    signal_map[real_ts] = []
-                signal_map[real_ts].append(sig)
-            matched = sum(1 for k in signal_map if k in bar_keys)
+        if remapped_count > 0:
+            new_matched = sum(1 for k in new_signal_map if k in bar_keys)
+            logger.warning(
+                f"信号 timestamp 疑似行号，自动映射 {remapped_count}/{len(signals)} 个 → 命中K线={new_matched}"
+            )
+            if new_matched > matched:
+                signal_map = new_signal_map
+                matched = new_matched
 
     if signals:
         sample_sig_ts = list(signal_map.keys())[:3] if signal_map else []
