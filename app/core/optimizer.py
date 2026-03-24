@@ -1,16 +1,21 @@
 """
-参数优化器 — 遗传算法 + 网格搜索
+参数优化器 — 五种搜索算法
 
 支持:
   - ParameterSpace: 定义整数/浮点/离散参数空间
-  - GeneticOptimizer: 锦标赛选择 + 均匀交叉 + 变异 + 精英保留 + 早停
   - GridSearch: 小参数空间的穷举搜索
+  - RandomSearch: 高维随机采样
+  - GeneticOptimizer: 锦标赛选择 + 均匀交叉 + 变异 + 精英保留 + 早停
+  - BayesianOptimizer: TPE 代理模型，少量评估快速收敛
+  - SimulatedAnnealing: 模拟退火，跳出局部最优
+  - ParticleSwarmOptimizer: 粒子群，群体协作搜索
   - OptimizationResult: 统一结果格式
 """
 
 from __future__ import annotations
 
 import itertools
+import math
 import random
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -330,3 +335,361 @@ class GridSearch:
             generations=1,
             total_evaluations=total,
         )
+
+
+# ═══════════════════════════════════════════
+#  随机搜索
+# ═══════════════════════════════════════════
+
+
+class RandomSearch:
+    """随机采样搜索。高维空间比网格高效，实现简单。"""
+
+    def __init__(
+        self,
+        space: ParameterSpace,
+        fitness_fn: Callable[[dict], float],
+        n_samples: int = 200,
+    ):
+        self.space = space
+        self.fitness_fn = fitness_fn
+        self.n_samples = n_samples
+
+    def run(self) -> OptimizationResult:
+        logger.info(f"随机搜索: 采样 {self.n_samples} 组")
+
+        all_results: list[dict] = []
+        best_fitness = float("-inf")
+        best_params: dict = {}
+
+        for i in range(self.n_samples):
+            params = self.space.sample_random()
+            try:
+                fitness = self.fitness_fn(params)
+            except Exception as e:
+                logger.warning(f"评估失败: {params} -> {e}")
+                fitness = float("-inf")
+
+            all_results.append({"params": params.copy(), "fitness": fitness})
+            if fitness > best_fitness:
+                best_fitness = fitness
+                best_params = params.copy()
+
+            if (i + 1) % max(1, self.n_samples // 10) == 0:
+                logger.info(f"[{i + 1}/{self.n_samples}] 当前最优: {best_fitness:.6f}")
+
+        return OptimizationResult(
+            best_params=best_params,
+            best_fitness=best_fitness,
+            all_results=all_results,
+            generations=1,
+            total_evaluations=self.n_samples,
+        )
+
+
+# ═══════════════════════════════════════════
+#  贝叶斯优化 (Tree-structured Parzen Estimator)
+# ═══════════════════════════════════════════
+
+
+class BayesianOptimizer:
+    """
+    TPE 贝叶斯优化器。
+
+    将已评估样本分为 good / bad 两组（按 gamma 分位），
+    对每个参数分别建核密度估计，采样时最大化 l(x)/g(x)。
+    评估次数少时也能快速收敛。
+    """
+
+    def __init__(
+        self,
+        space: ParameterSpace,
+        fitness_fn: Callable[[dict], float],
+        n_initial: int = 20,
+        n_iterations: int = 80,
+        gamma: float = 0.25,
+        n_candidates: int = 64,
+    ):
+        self.space = space
+        self.fitness_fn = fitness_fn
+        self.n_initial = n_initial
+        self.n_iterations = n_iterations
+        self.gamma = gamma
+        self.n_candidates = n_candidates
+
+    def run(self) -> OptimizationResult:
+        total = self.n_initial + self.n_iterations
+        logger.info(f"贝叶斯优化(TPE): 初始 {self.n_initial} + 迭代 {self.n_iterations} = {total} 次评估")
+
+        all_results: list[dict] = []
+        best_fitness = float("-inf")
+        best_params: dict = {}
+
+        for i in range(self.n_initial):
+            params = self.space.sample_random()
+            fitness = self._safe_eval(params)
+            all_results.append({"params": params.copy(), "fitness": fitness})
+            if fitness > best_fitness:
+                best_fitness = fitness
+                best_params = params.copy()
+
+        logger.info(f"初始采样完成, 当前最优: {best_fitness:.6f}")
+
+        for i in range(self.n_iterations):
+            params = self._tpe_sample(all_results)
+            fitness = self._safe_eval(params)
+            all_results.append({"params": params.copy(), "fitness": fitness})
+            if fitness > best_fitness:
+                best_fitness = fitness
+                best_params = params.copy()
+
+            step = i + self.n_initial + 1
+            if step % max(1, total // 10) == 0:
+                logger.info(f"[{step}/{total}] 当前最优: {best_fitness:.6f}")
+
+        return OptimizationResult(
+            best_params=best_params,
+            best_fitness=best_fitness,
+            all_results=all_results,
+            generations=1,
+            total_evaluations=len(all_results),
+        )
+
+    def _safe_eval(self, params: dict) -> float:
+        try:
+            return self.fitness_fn(params)
+        except Exception as e:
+            logger.warning(f"评估失败: {params} -> {e}")
+            return float("-inf")
+
+    def _tpe_sample(self, results: list[dict]) -> dict:
+        """TPE 采样：分 good/bad 组，对每个参数建核密度，选 l(x)/g(x) 最大的候选。"""
+        sorted_r = sorted(results, key=lambda x: x["fitness"], reverse=True)
+        n_good = max(1, int(len(sorted_r) * self.gamma))
+        good = [r["params"] for r in sorted_r[:n_good]]
+        bad = [r["params"] for r in sorted_r[n_good:]] or [r["params"] for r in sorted_r]
+
+        best_score = float("-inf")
+        best_candidate = None
+
+        for _ in range(self.n_candidates):
+            candidate = self.space.sample_random()
+            score_good = self._kde_score(candidate, good)
+            score_bad = self._kde_score(candidate, bad)
+            ratio = score_good - score_bad
+            if ratio > best_score:
+                best_score = ratio
+                best_candidate = candidate
+
+        return best_candidate or self.space.sample_random()
+
+    @staticmethod
+    def _kde_score(candidate: dict, samples: list[dict]) -> float:
+        """简化的核密度估计（对数得分）。"""
+        if not samples:
+            return 0.0
+        log_density = 0.0
+        for key in candidate:
+            val = candidate[key]
+            col_vals = [s[key] for s in samples]
+            if isinstance(val, (int, float)):
+                nums = [float(v) for v in col_vals if isinstance(v, (int, float))]
+                if not nums:
+                    continue
+                mean = sum(nums) / len(nums)
+                var = max(sum((x - mean) ** 2 for x in nums) / len(nums), 1e-8)
+                log_density += -0.5 * ((float(val) - mean) ** 2) / var
+            else:
+                matches = sum(1 for v in col_vals if v == val)
+                log_density += math.log(max(matches / len(col_vals), 0.01))
+        return log_density
+
+
+# ═══════════════════════════════════════════
+#  模拟退火
+# ═══════════════════════════════════════════
+
+
+class SimulatedAnnealing:
+    """
+    模拟退火优化器。
+
+    高温时接受差解跳出局部最优，逐步降温收敛。
+    """
+
+    def __init__(
+        self,
+        space: ParameterSpace,
+        fitness_fn: Callable[[dict], float],
+        n_iterations: int = 200,
+        temp_start: float = 1.0,
+        temp_end: float = 0.01,
+        cooling_rate: float = None,
+    ):
+        self.space = space
+        self.fitness_fn = fitness_fn
+        self.n_iterations = n_iterations
+        self.temp_start = temp_start
+        self.temp_end = temp_end
+        self.cooling_rate = cooling_rate or (temp_end / temp_start) ** (1.0 / max(n_iterations, 1))
+
+    def run(self) -> OptimizationResult:
+        logger.info(f"模拟退火: {self.n_iterations} 次迭代, T: {self.temp_start} → {self.temp_end}")
+
+        current = self.space.sample_random()
+        current_fitness = self._safe_eval(current)
+        best_params = current.copy()
+        best_fitness = current_fitness
+
+        all_results: list[dict] = [{"params": current.copy(), "fitness": current_fitness}]
+        temp = self.temp_start
+
+        for i in range(self.n_iterations):
+            neighbor = self.space.mutate(current, mutation_rate=0.4)
+            neighbor_fitness = self._safe_eval(neighbor)
+            all_results.append({"params": neighbor.copy(), "fitness": neighbor_fitness})
+
+            delta = neighbor_fitness - current_fitness
+            if delta > 0 or (temp > 0 and random.random() < math.exp(delta / max(temp, 1e-10))):
+                current = neighbor
+                current_fitness = neighbor_fitness
+
+            if current_fitness > best_fitness:
+                best_fitness = current_fitness
+                best_params = current.copy()
+
+            temp *= self.cooling_rate
+
+            if (i + 1) % max(1, self.n_iterations // 10) == 0:
+                logger.info(f"[{i + 1}/{self.n_iterations}] T={temp:.4f} 最优: {best_fitness:.6f}")
+
+        return OptimizationResult(
+            best_params=best_params,
+            best_fitness=best_fitness,
+            all_results=all_results,
+            generations=1,
+            total_evaluations=len(all_results),
+        )
+
+    def _safe_eval(self, params: dict) -> float:
+        try:
+            return self.fitness_fn(params)
+        except Exception as e:
+            logger.warning(f"评估失败: {params} -> {e}")
+            return float("-inf")
+
+
+# ═══════════════════════════════════════════
+#  粒子群优化 (PSO)
+# ═══════════════════════════════════════════
+
+
+class ParticleSwarmOptimizer:
+    """
+    粒子群优化器。
+
+    每个粒子记住个体最优位置，同时向全局最优靠拢。
+    离散参数通过概率映射处理。
+    """
+
+    def __init__(
+        self,
+        space: ParameterSpace,
+        fitness_fn: Callable[[dict], float],
+        n_particles: int = 30,
+        n_iterations: int = 50,
+        w: float = 0.7,
+        c1: float = 1.5,
+        c2: float = 1.5,
+    ):
+        self.space = space
+        self.fitness_fn = fitness_fn
+        self.n_particles = n_particles
+        self.n_iterations = n_iterations
+        self.w = w
+        self.c1 = c1
+        self.c2 = c2
+
+    def run(self) -> OptimizationResult:
+        logger.info(f"粒子群优化: {self.n_particles} 粒子 × {self.n_iterations} 迭代")
+
+        particles = [self.space.sample_random() for _ in range(self.n_particles)]
+        velocities = [{} for _ in range(self.n_particles)]
+        p_best = [p.copy() for p in particles]
+        p_best_fitness = [float("-inf")] * self.n_particles
+        g_best: dict = {}
+        g_best_fitness = float("-inf")
+        all_results: list[dict] = []
+
+        for it in range(self.n_iterations):
+            for i, params in enumerate(particles):
+                fitness = self._safe_eval(params)
+                all_results.append({"params": params.copy(), "fitness": fitness})
+
+                if fitness > p_best_fitness[i]:
+                    p_best_fitness[i] = fitness
+                    p_best[i] = params.copy()
+
+                if fitness > g_best_fitness:
+                    g_best_fitness = fitness
+                    g_best = params.copy()
+
+            for i in range(self.n_particles):
+                particles[i] = self._update_particle(
+                    particles[i], velocities[i], p_best[i], g_best,
+                )
+
+            if (it + 1) % max(1, self.n_iterations // 10) == 0:
+                logger.info(f"[{it + 1}/{self.n_iterations}] 全局最优: {g_best_fitness:.6f}")
+
+        return OptimizationResult(
+            best_params=g_best,
+            best_fitness=g_best_fitness,
+            all_results=all_results,
+            generations=self.n_iterations,
+            total_evaluations=len(all_results),
+        )
+
+    def _update_particle(self, pos: dict, vel: dict, p_best: dict, g_best: dict) -> dict:
+        """更新粒子位置，离散/选择参数用概率切换。"""
+        new_pos = {}
+        for p in self.space._params:
+            name = p["name"]
+            if p["type"] in ("int", "float"):
+                v = vel.get(name, 0.0)
+                v = (self.w * v
+                     + self.c1 * random.random() * (self._to_num(p_best.get(name, 0)) - self._to_num(pos.get(name, 0)))
+                     + self.c2 * random.random() * (self._to_num(g_best.get(name, 0)) - self._to_num(pos.get(name, 0))))
+                vel[name] = v
+                new_val = self._to_num(pos.get(name, 0)) + v
+                new_val = max(p["low"], min(p["high"], new_val))
+                if p["type"] == "int":
+                    step = p.get("step", 1)
+                    new_val = round((new_val - p["low"]) / step) * step + p["low"]
+                    new_pos[name] = int(max(p["low"], min(p["high"], new_val)))
+                else:
+                    step = p.get("step")
+                    if step:
+                        new_val = round((new_val - p["low"]) / step) * step + p["low"]
+                    new_pos[name] = round(max(p["low"], min(p["high"], new_val)), 8)
+            elif p["type"] == "choice":
+                prob_switch = self.c1 * random.random() * 0.1 + self.c2 * random.random() * 0.1
+                if random.random() < prob_switch:
+                    new_pos[name] = g_best.get(name, pos.get(name))
+                else:
+                    new_pos[name] = pos.get(name)
+        return new_pos
+
+    @staticmethod
+    def _to_num(val) -> float:
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _safe_eval(self, params: dict) -> float:
+        try:
+            return self.fitness_fn(params)
+        except Exception as e:
+            logger.warning(f"评估失败: {params} -> {e}")
+            return float("-inf")

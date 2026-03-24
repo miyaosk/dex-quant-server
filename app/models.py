@@ -249,7 +249,7 @@ class OptimizeRequest(BaseModel):
     slippage_bps: float = 5.0
     margin_mode: str = "isolated"
     direction: str = "long_short"
-    method: str = Field(default="grid", description="grid / genetic")
+    method: str = Field(default="grid", description="grid / genetic / random / bayesian / annealing / pso")
     max_combinations: int = Field(default=200, description="最大组合数限制")
     fitness_metric: str = Field(default="sharpe_ratio", description="优化目标指标")
 

@@ -29,7 +29,10 @@ from app.services.data_service import DataService
 from app import database
 from app.routers.auth import validate_token
 from app.core.script_executor import execute_strategy, ScriptSecurityError
-from app.core.optimizer import ParameterSpace, GridSearch, GeneticOptimizer
+from app.core.optimizer import (
+    ParameterSpace, GridSearch, GeneticOptimizer,
+    RandomSearch, BayesianOptimizer, SimulatedAnnealing, ParticleSwarmOptimizer,
+)
 
 SCRIPT_TIMEOUT_SECONDS = 120
 OPTIMIZE_SCRIPT_TIMEOUT = 60
@@ -191,6 +194,11 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
     """
     await validate_token(x_token)
 
+    valid_methods = ("grid", "genetic", "random", "bayesian", "annealing", "pso")
+    method = req.method or "grid"
+    if method not in valid_methods:
+        raise HTTPException(status_code=400, detail=f"method 必须为: {', '.join(valid_methods)}")
+
     space = ParameterSpace()
     for p in req.params:
         if p.type == "int":
@@ -200,17 +208,22 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
         elif p.type == "choice":
             space.add_choice(p.name, p.choices)
 
-    grid = space.get_grid()
-    if len(grid) > req.max_combinations:
-        raise HTTPException(
-            status_code=400,
-            detail=f"参数组合数 {len(grid)} 超过上限 {req.max_combinations}，请缩小参数范围或增大 step",
-        )
+    if method == "grid":
+        grid = space.get_grid()
+        if len(grid) > req.max_combinations:
+            raise HTTPException(
+                status_code=400,
+                detail=f"参数组合数 {len(grid)} 超过上限 {req.max_combinations}，请缩小参数范围或增大 step，或换用 genetic/bayesian",
+            )
+        n_evals = len(grid)
+    else:
+        n_evals = min(req.max_combinations, space.total_combinations)
 
     job_id = f"opt_{uuid.uuid4().hex[:12]}"
     _optimize_jobs[job_id] = {
         "status": "running",
-        "total": len(grid),
+        "method": method,
+        "total": n_evals,
         "completed": 0,
         "failed": 0,
         "current_best_fitness": 0,
@@ -220,15 +233,16 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
         "start_ts": time.time(),
     }
 
-    logger.info(f"[{job_id}] 优化任务已提交 | 组合数={len(grid)} | {req.symbol} {req.timeframe}")
+    logger.info(f"[{job_id}] 优化任务已提交 | method={method} 评估数={n_evals} | {req.symbol} {req.timeframe}")
 
-    asyncio.create_task(_run_optimize_job(job_id, req, grid))
+    asyncio.create_task(_run_optimize_job(job_id, req, space, n_evals))
 
     return {
         "job_id": job_id,
         "status": "running",
-        "total_combinations": len(grid),
-        "message": f"优化任务已提交，共 {len(grid)} 种参数组合。请用 GET /backtest/optimize/{job_id} 查询进度。",
+        "method": method,
+        "total_combinations": n_evals,
+        "message": f"优化任务已提交 (method={method})，共 {n_evals} 次评估。请用 GET /backtest/optimize/{job_id} 查询进度。",
     }
 
 
@@ -271,9 +285,10 @@ async def get_optimize_progress(job_id: str, x_token: str = Header(default="")):
     return response
 
 
-async def _run_optimize_job(job_id: str, req: OptimizeRequest, grid: list[dict]):
-    """后台执行优化任务，实时更新进度。"""
+async def _run_optimize_job(job_id: str, req: OptimizeRequest, space: ParameterSpace, n_evals: int):
+    """后台执行优化任务，实时更新进度。支持所有搜索方法。"""
     job = _optimize_jobs[job_id]
+    method = job.get("method", "grid")
 
     ds = DataService(proxy=config.PROXY_URL)
     try:
@@ -311,8 +326,103 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, grid: list[dict])
         "risk_per_trade": 0.02,
     }
 
-    all_results: list[dict] = []
+    def _evaluate(params: dict) -> float:
+        """同步评估单组参数，供优化器调用。"""
+        injected_script = _inject_params(req.script_content, params)
+        try:
+            import asyncio as _aio
+            loop = _aio.new_event_loop()
+            sig_result = loop.run_until_complete(
+                _aio.wait_for(
+                    _aio.to_thread(
+                        execute_strategy,
+                        script_content=injected_script,
+                        mode="backtest",
+                        start_date=req.start_date,
+                        end_date=req.end_date,
+                    ),
+                    timeout=OPTIMIZE_SCRIPT_TIMEOUT,
+                )
+            )
+            loop.close()
+        except Exception as e:
+            logger.warning(f"[{job_id}] 脚本执行失败 params={params}: {e}")
+            job["failed"] += 1
+            job["completed"] += 1
+            return float("-inf")
 
+        signals = sig_result.get("signals", [])
+        if not signals:
+            job["failed"] += 1
+            job["completed"] += 1
+            return float("-inf")
+
+        bt_result = _run_bt(df=df, signals=signals, config=bt_config)
+        metrics = bt_result.get("metrics", {})
+
+        fitness = metrics.get(req.fitness_metric, 0)
+        if isinstance(fitness, (int, float)) and fitness != fitness:
+            fitness = 0
+
+        job["completed"] += 1
+
+        if fitness > job["current_best_fitness"]:
+            job["current_best_fitness"] = fitness
+            job["current_best_params"] = params.copy()
+
+        _eval_cache.append({"params": params.copy(), "fitness": fitness, "metrics": metrics})
+        return fitness
+
+    _eval_cache: list[dict] = []
+
+    try:
+        if method == "grid":
+            grid = space.get_grid()
+            job["total"] = len(grid)
+            all_results = await _run_grid_loop(job_id, job, grid, req, df, bt_config)
+        else:
+            await asyncio.to_thread(_run_optimizer_sync, method, space, _evaluate, n_evals)
+            all_results = _eval_cache
+    except Exception as e:
+        job["status"] = "failed"
+        job["error"] = str(e)
+        job["elapsed_ms"] = int((time.time() - job["start_ts"]) * 1000)
+        ds.close()
+        return
+
+    ds.close()
+    _finalize_job(job_id, job, all_results)
+
+
+def _run_optimizer_sync(method: str, space: ParameterSpace, evaluate_fn, n_evals: int):
+    """在线程中同步运行非 grid 优化器。"""
+    if method == "genetic":
+        pop_size = min(50, max(10, n_evals // 5))
+        gens = max(5, n_evals // pop_size)
+        opt = GeneticOptimizer(space, evaluate_fn, population_size=pop_size, generations=gens)
+    elif method == "random":
+        opt = RandomSearch(space, evaluate_fn, n_samples=n_evals)
+    elif method == "bayesian":
+        n_init = max(5, n_evals // 5)
+        n_iter = n_evals - n_init
+        opt = BayesianOptimizer(space, evaluate_fn, n_initial=n_init, n_iterations=n_iter)
+    elif method == "annealing":
+        opt = SimulatedAnnealing(space, evaluate_fn, n_iterations=n_evals)
+    elif method == "pso":
+        n_particles = min(30, max(10, n_evals // 5))
+        n_iter = max(5, n_evals // n_particles)
+        opt = ParticleSwarmOptimizer(space, evaluate_fn, n_particles=n_particles, n_iterations=n_iter)
+    else:
+        raise ValueError(f"未知方法: {method}")
+
+    opt.run()
+
+
+async def _run_grid_loop(job_id, job, grid, req, df, bt_config) -> list[dict]:
+    """网格搜索保持原有逐步评估+实时进度的逻辑。"""
+    from app.core.backtest_engine import run_backtest as _run_bt
+
+    all_results: list[dict] = []
     for i, params in enumerate(grid):
         injected_script = _inject_params(req.script_content, params)
         try:
@@ -339,11 +449,7 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, grid: list[dict])
             if isinstance(fitness, (int, float)) and fitness != fitness:
                 fitness = 0
 
-            all_results.append({
-                "params": params,
-                "fitness": fitness,
-                "metrics": metrics,
-            })
+            all_results.append({"params": params, "fitness": fitness, "metrics": metrics})
 
             if fitness > job["current_best_fitness"]:
                 job["current_best_fitness"] = fitness
@@ -361,17 +467,20 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, grid: list[dict])
                 f"当前最优 fitness={job['current_best_fitness']:.4f}"
             )
 
-    ds.close()
+    return all_results
 
-    all_results.sort(key=lambda x: x["fitness"], reverse=True)
+
+def _finalize_job(job_id: str, job: dict, all_results: list[dict]):
+    """排序结果、更新 job 状态。"""
+    all_results.sort(key=lambda x: x.get("fitness", 0), reverse=True)
 
     top_results = []
     for rank, r in enumerate(all_results[:20], 1):
-        m = r["metrics"]
+        m = r.get("metrics", {})
         top_results.append({
             "rank": rank,
             "params": r["params"],
-            "fitness": r["fitness"],
+            "fitness": r.get("fitness", 0),
             "total_return_pct": m.get("total_return_pct", 0),
             "sharpe_ratio": m.get("sharpe_ratio", 0),
             "sortino_ratio": m.get("sortino_ratio", 0),
@@ -387,7 +496,7 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, grid: list[dict])
     job["elapsed_ms"] = int((time.time() - job["start_ts"]) * 1000)
 
     logger.info(
-        f"[{job_id}] 优化完成 | 评估={len(all_results)} 失败={job['failed']} | "
+        f"[{job_id}] 优化完成 | method={job.get('method','grid')} 评估={len(all_results)} 失败={job['failed']} | "
         f"最优fitness={job['current_best_fitness']:.4f} | 耗时={job['elapsed_ms']}ms"
     )
 
