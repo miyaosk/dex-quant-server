@@ -2,9 +2,11 @@
 回测 API（免费无限制，不占配额）
 
   1. POST /run              — 客户端传信号，服务器回测
-  2. POST /run-server       — 客户端传脚本，服务器执行脚本+回测（一站式，推荐）
-  3. POST /optimize         — 参数优化：提交异步任务，返回 job_id
-  4. GET  /optimize/{job_id} — 查询优化进度和结果
+  2. POST /run-server       — 客户端传脚本，服务器执行脚本+回测（一站式，同步）
+  3. POST /submit           — 客户端传脚本，异步提交，立即返回 job_id（推荐）
+  4. GET  /job/{job_id}     — 查询异步回测进度和结果
+  5. POST /optimize         — 参数优化：提交异步任务，返回 job_id
+  6. GET  /optimize/{job_id} — 查询优化进度和结果
 
 需要 X-Token 头认证，但不消耗配额
 """
@@ -37,8 +39,9 @@ from app.core.optimizer import (
 SCRIPT_TIMEOUT_SECONDS = 120
 OPTIMIZE_SCRIPT_TIMEOUT = 60
 
-# 内存中的优化任务状态（进程级别，Railway 单实例足够）
+# 内存中的任务状态（进程级别，Railway 单实例足够）
 _optimize_jobs: dict[str, dict] = {}
+_backtest_jobs: dict[str, dict] = {}
 
 router = APIRouter(prefix="/backtest", tags=["回测"])
 
@@ -183,6 +186,160 @@ async def run_server_backtest(req: ServerBacktestRequest, x_token: str = Header(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         ds.close()
+
+
+# ═══════════════ 异步回测（submit + poll） ═══════════════
+
+
+@router.post("/submit")
+async def submit_server_backtest(req: ServerBacktestRequest, x_token: str = Header(default="")):
+    """
+    异步提交回测任务，立即返回 job_id。
+
+    用 GET /backtest/job/{job_id} 轮询进度。
+    进度阶段: script_running → fetching_klines → backtesting → completed/failed
+    """
+    await validate_token(x_token)
+
+    script = req.script_content
+    strategy_name = req.strategy_name
+
+    if not script and req.strategy_id:
+        row = await database.get_strategy(req.strategy_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"策略 {req.strategy_id} 不存在")
+        script = row.get("script_content", "")
+        strategy_name = strategy_name or row.get("name", "")
+
+    if not script:
+        raise HTTPException(status_code=400, detail="需要提供 script_content 或有效的 strategy_id")
+
+    job_id = f"bt_{uuid.uuid4().hex[:12]}"
+    _backtest_jobs[job_id] = {
+        "status": "running",
+        "stage": "script_running",
+        "stage_label": "正在执行策略脚本生成信号...",
+        "progress_pct": 10,
+        "start_ts": time.time(),
+        "elapsed_ms": 0,
+        "result": None,
+        "error": None,
+    }
+
+    logger.info(f"[{job_id}] 异步回测已提交 | {req.symbol} {req.timeframe} {req.start_date} → {req.end_date}")
+
+    asyncio.create_task(_run_backtest_job(job_id, script, strategy_name, req))
+
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "stage": "script_running",
+        "message": f"回测任务已提交，用 GET /backtest/job/{job_id} 查询进度。",
+    }
+
+
+@router.get("/job/{job_id}")
+async def get_backtest_job(job_id: str, x_token: str = Header(default="")):
+    """查询异步回测任务进度和结果。"""
+    await validate_token(x_token)
+
+    job = _backtest_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"回测任务 {job_id} 不存在")
+
+    elapsed_ms = int((time.time() - job["start_ts"]) * 1000) if job["status"] == "running" else job["elapsed_ms"]
+
+    response = {
+        "job_id": job_id,
+        "status": job["status"],
+        "stage": job["stage"],
+        "stage_label": job["stage_label"],
+        "progress_pct": job["progress_pct"],
+        "elapsed_ms": elapsed_ms,
+    }
+
+    if job["status"] == "completed" and job["result"]:
+        response.update(job["result"])
+
+    if job["status"] == "failed":
+        response["error"] = job.get("error", "")
+
+    return response
+
+
+async def _run_backtest_job(job_id: str, script: str, strategy_name: str, req: ServerBacktestRequest):
+    """后台执行回测任务，更新 _backtest_jobs 中的进度。"""
+    job = _backtest_jobs[job_id]
+    try:
+        job.update(stage="script_running", stage_label="正在执行策略脚本生成信号...", progress_pct=15)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                execute_strategy,
+                script_content=script,
+                mode="backtest",
+                start_date=req.start_date,
+                end_date=req.end_date,
+            ),
+            timeout=SCRIPT_TIMEOUT_SECONDS,
+        )
+
+        signals = result.get("signals", [])
+        if not signals:
+            job.update(status="failed", error="脚本执行后未产生任何信号",
+                       elapsed_ms=int((time.time() - job["start_ts"]) * 1000))
+            return
+
+        job.update(stage="fetching_klines", stage_label=f"信号 {len(signals)} 个，正在拉取K线数据...", progress_pct=40)
+        strategy_name = strategy_name or result.get("strategy_name", "unnamed")
+
+        svc, ds = _build_backtest_service()
+        try:
+            job.update(stage="backtesting", stage_label="回测引擎模拟交易中...", progress_pct=60)
+
+            bt_config = {
+                "initial_capital": req.initial_capital,
+                "leverage": req.leverage,
+                "fee_rate": req.fee_rate,
+                "slippage_bps": req.slippage_bps,
+                "margin_mode": req.margin_mode,
+                "direction": req.direction,
+            }
+            bt_result = await svc.execute(
+                strategy_name=strategy_name,
+                strategy_id=req.strategy_id,
+                symbol=req.symbol,
+                timeframe=req.timeframe,
+                start_date=req.start_date,
+                end_date=req.end_date,
+                signals=signals,
+                config=bt_config,
+            )
+
+            job.update(stage="calculating", stage_label="计算绩效指标...", progress_pct=90)
+
+            job.update(
+                status="completed",
+                stage="done",
+                stage_label="回测完成",
+                progress_pct=100,
+                elapsed_ms=int((time.time() - job["start_ts"]) * 1000),
+                result=bt_result,
+            )
+            logger.info(f"[{job_id}] 异步回测完成 | 耗时 {job['elapsed_ms']}ms")
+
+        finally:
+            ds.close()
+
+    except asyncio.TimeoutError:
+        job.update(status="failed", error=f"脚本执行超时（{SCRIPT_TIMEOUT_SECONDS}秒）",
+                   elapsed_ms=int((time.time() - job["start_ts"]) * 1000))
+    except ScriptSecurityError as e:
+        job.update(status="failed", error=f"脚本安全检查未通过: {e}",
+                   elapsed_ms=int((time.time() - job["start_ts"]) * 1000))
+    except Exception as e:
+        logger.error(f"[{job_id}] 异步回测异常: {e}")
+        job.update(status="failed", error=str(e),
+                   elapsed_ms=int((time.time() - job["start_ts"]) * 1000))
 
 
 @router.post("/optimize")
