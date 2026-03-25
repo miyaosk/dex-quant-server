@@ -65,7 +65,7 @@ docker run -p 8000:8000 \
 | `DEFAULT_FEE_RATE` | `0.0005` | 默认手续费率 |
 | `DEFAULT_SLIPPAGE_BPS` | `2.0` | 默认滑点（基点） |
 | `MAX_BACKTEST_BARS` | `500000` | 单次回测最大 K 线数 |
-| `SANDBOX_MODE` | `process` | 脚本执行模式：`process`（进程内沙箱）或 `docker`（容器隔离） |
+| `SANDBOX_MODE` | `docker` | 脚本执行模式：`docker`（容器隔离，默认）或 `process`（进程内沙箱，无 Docker 时回退） |
 | `SANDBOX_IMAGE` | `dex-sandbox:latest` | Docker 沙箱镜像名（仅 docker 模式） |
 | `SANDBOX_TIMEOUT` | `120` | 沙箱执行超时秒数 |
 | `SANDBOX_MEMORY` | `512m` | 沙箱容器内存限制（仅 docker 模式） |

@@ -2,8 +2,8 @@
 策略脚本执行器 — 在沙箱中安全运行用户上传的策略脚本
 
 执行模式 (SANDBOX_MODE):
-  process — 进程内沙箱（AST 扫描 + 受限 builtins），适合 Railway 等 PaaS
-  docker  — Docker 容器隔离（断网 + 内存限 + 非root），适合自托管服务器
+  docker  — Docker 容器隔离（断网 + 内存限 + 非root），默认推荐
+  process — 进程内沙箱（AST 扫描 + 受限 builtins），无 Docker 环境时回退（如 Railway PaaS）
 
 安全层级 (process 模式):
   1. AST 预扫描 — 拒绝包含危险 import / 属性访问的脚本
@@ -278,4 +278,4 @@ async def execute_strategy_docker(
 def get_sandbox_mode() -> str:
     """返回当前沙箱执行模式。"""
     import os
-    return os.getenv("SANDBOX_MODE", "process")
+    return os.getenv("SANDBOX_MODE", "docker")

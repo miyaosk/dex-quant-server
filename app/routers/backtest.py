@@ -152,9 +152,9 @@ async def run_server_backtest(req: ServerBacktestRequest, x_token: str = Header(
 
     脚本来源（二选一）:
     - script_content: 直接传脚本源码
-    - strategy_id: 从数据库加载已保存的脚本
+    - strategy_id: 从数据库加载已保存的脚本（须归属当前用户）
     """
-    await validate_token(x_token)
+    record = await validate_token(x_token)
 
     script = req.script_content
     strategy_name = req.strategy_name
@@ -163,6 +163,8 @@ async def run_server_backtest(req: ServerBacktestRequest, x_token: str = Header(
         row = await database.get_strategy(req.strategy_id)
         if row is None:
             raise HTTPException(status_code=404, detail=f"策略 {req.strategy_id} 不存在")
+        if row.get("machine_code") and row["machine_code"] != record["machine_code"]:
+            raise HTTPException(status_code=403, detail="无权访问该策略")
         script = row.get("script_content", "")
         strategy_name = strategy_name or row.get("name", "")
 
@@ -254,7 +256,7 @@ async def submit_server_backtest(req: ServerBacktestRequest, x_token: str = Head
     用 GET /backtest/job/{job_id} 轮询进度。
     进度阶段: script_running → fetching_klines → backtesting → completed/failed
     """
-    await validate_token(x_token)
+    record = await validate_token(x_token)
 
     script = req.script_content
     strategy_name = req.strategy_name
@@ -263,6 +265,8 @@ async def submit_server_backtest(req: ServerBacktestRequest, x_token: str = Head
         row = await database.get_strategy(req.strategy_id)
         if row is None:
             raise HTTPException(status_code=404, detail=f"策略 {req.strategy_id} 不存在")
+        if row.get("machine_code") and row["machine_code"] != record["machine_code"]:
+            raise HTTPException(status_code=403, detail="无权访问该策略")
         script = row.get("script_content", "")
         strategy_name = strategy_name or row.get("name", "")
 

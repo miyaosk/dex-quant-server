@@ -42,6 +42,6 @@ DEFAULT_SLIPPAGE_BPS: float = float(os.getenv("DEFAULT_SLIPPAGE_BPS", "2.0"))
 MAX_BACKTEST_BARS: int = int(os.getenv("MAX_BACKTEST_BARS", "500000"))
 API_PREFIX: str = os.getenv("API_PREFIX", "/api/v1")
 
-# process = 进程内沙箱（Railway 等 PaaS）
-# docker  = Docker 容器隔离（自托管服务器，需要 Docker）
-SANDBOX_MODE: str = os.getenv("SANDBOX_MODE", "process")
+# docker  = Docker 容器隔离（断网 + 内存限 + 非root），默认推荐
+# process = 进程内沙箱（AST 扫描 + 受限 builtins），用于无 Docker 环境（如 Railway PaaS）
+SANDBOX_MODE: str = os.getenv("SANDBOX_MODE", "docker")
