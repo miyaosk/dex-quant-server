@@ -14,13 +14,26 @@
 import asyncio
 import gc
 import json
+import os
 import re
+import resource
 import time
 import uuid
 import threading
 
 from fastapi import APIRouter, Header, HTTPException
 from loguru import logger
+
+
+def _mem_mb() -> float:
+    """当前进程 RSS 内存 (MB)。"""
+    try:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        if os.uname().sysname == "Darwin":
+            return ru.ru_maxrss / (1024 * 1024)
+        return ru.ru_maxrss / 1024
+    except Exception:
+        return 0.0
 
 from app import config
 from app.models import (
@@ -257,7 +270,7 @@ async def submit_server_backtest(req: ServerBacktestRequest, x_token: str = Head
         "error": None,
     }
 
-    logger.info(f"[{job_id}] 异步回测已提交 | {req.symbol} {req.timeframe} {req.start_date} → {req.end_date}")
+    logger.info(f"[{job_id}] 异步回测已提交 | {req.symbol} {req.timeframe} {req.start_date} → {req.end_date} | mem={_mem_mb():.0f}MB")
 
     asyncio.create_task(_run_backtest_job(job_id, script, strategy_name, req))
 
@@ -302,6 +315,7 @@ async def _run_backtest_job(job_id: str, script: str, strategy_name: str, req: S
     """后台执行回测任务，更新 _backtest_jobs 中的进度。"""
     job = _backtest_jobs[job_id]
     try:
+        logger.info(f"[{job_id}] 开始执行脚本 | mem={_mem_mb():.0f}MB")
         job.update(stage="script_running", stage_label="正在执行策略脚本生成信号...", progress_pct=15)
         result = await asyncio.wait_for(
             asyncio.to_thread(
@@ -315,6 +329,7 @@ async def _run_backtest_job(job_id: str, script: str, strategy_name: str, req: S
         )
 
         signals = result.get("signals", [])
+        logger.info(f"[{job_id}] 脚本完成 | 信号={len(signals)} | mem={_mem_mb():.0f}MB")
         if not signals:
             job.update(status="failed", error="脚本执行后未产生任何信号",
                        elapsed_ms=int((time.time() - job["start_ts"]) * 1000))
@@ -431,7 +446,7 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
         "start_ts": time.time(),
     }
 
-    logger.info(f"[{job_id}] 优化任务已提交 | method={method} 评估数={n_evals} | {req.symbol} {req.timeframe}")
+    logger.info(f"[{job_id}] 优化任务已提交 | method={method} 评估数={n_evals} | {req.symbol} {req.timeframe} | mem={_mem_mb():.0f}MB")
 
     asyncio.create_task(_run_optimize_job(job_id, req, space, n_evals))
 
@@ -515,7 +530,7 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, space: ParameterS
 
     # 预构建 K 线缓存，所有评估复用同一份数据
     kline_cache = {f"{req.symbol}:{req.timeframe}": df}
-    logger.info(f"[{job_id}] K线缓存已建 | {req.symbol}:{req.timeframe} {len(df)} 根")
+    logger.info(f"[{job_id}] K线缓存已建 | {req.symbol}:{req.timeframe} {len(df)} 根 | mem={_mem_mb():.0f}MB")
 
     bt_config = {
         "symbol": req.symbol,
@@ -575,8 +590,9 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, space: ParameterS
 
         _eval_cache.append({"params": params.copy(), "fitness": fitness, "metrics": metrics})
 
-        if job["completed"] % 10 == 0:
+        if job["completed"] % 5 == 0:
             gc.collect()
+            logger.info(f"[{job_id}] eval {job['completed']}/{job['total']} | best={job['current_best_fitness']:.4f} | mem={_mem_mb():.0f}MB")
 
         return fitness
 
@@ -670,8 +686,9 @@ async def _run_grid_loop(job_id, job, grid, req, df, bt_config, kline_cache=None
 
         job["completed"] += 1
 
-        if (i + 1) % 10 == 0:
+        if (i + 1) % 5 == 0:
             gc.collect()
+            logger.info(f"[{job_id}] grid {i+1}/{len(grid)} | best={job['current_best_fitness']:.4f} | mem={_mem_mb():.0f}MB")
 
         if (i + 1) % max(1, len(grid) // 10) == 0:
             logger.info(

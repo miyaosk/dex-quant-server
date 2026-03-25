@@ -20,6 +20,10 @@ from app.routers import auth, data, strategy, backtest, signal
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init_db()
+    import resource, os
+    ru = resource.getrusage(resource.RUSAGE_SELF)
+    rss = ru.ru_maxrss / 1024 if os.uname().sysname != "Darwin" else ru.ru_maxrss / (1024 * 1024)
+    logger.info(f"启动完成 | 基线内存={rss:.0f}MB | pid={os.getpid()}")
     yield
     logger.info("服务关闭")
 
