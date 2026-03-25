@@ -49,19 +49,41 @@ docker run -p 8000:8000 \
 
 ## 环境变量
 
+> **安全提示**：密码等敏感信息必须通过环境变量传入，禁止硬编码在代码中。
+
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `MYSQL_HOST` | `127.0.0.1` | MySQL 主机地址 |
+| `MYSQL_HOST` | *(必填)* | MySQL 主机地址 |
 | `MYSQL_PORT` | `3306` | MySQL 端口 |
 | `MYSQL_USER` | `root` | MySQL 用户名 |
-| `MYSQL_PASSWORD` | *(空)* | MySQL 密码 |
+| `MYSQL_PASSWORD` | *(必填)* | MySQL 密码 |
 | `MYSQL_DB` | `dex_quant` | MySQL 数据库名 |
-| `MYSQL_POOL_SIZE` | `10` | 连接池最大连接数 |
+| `mysql_db` | *(可选)* | 旧格式兼容：JSON 字符串 `{"host":"..","port":..,"user":"..","password":"..","db":".."}` |
+| `DB_POOL_SIZE` | `1` | 连接池大小 |
 | `PROXY_URL` | *(空)* | HTTP 代理地址，用于访问 Binance API |
 | `API_PREFIX` | `/api/v1` | API 路由前缀 |
 | `DEFAULT_FEE_RATE` | `0.0005` | 默认手续费率 |
 | `DEFAULT_SLIPPAGE_BPS` | `2.0` | 默认滑点（基点） |
 | `MAX_BACKTEST_BARS` | `500000` | 单次回测最大 K 线数 |
+| `SANDBOX_MODE` | `process` | 脚本执行模式：`process`（进程内沙箱）或 `docker`（容器隔离） |
+| `SANDBOX_IMAGE` | `dex-sandbox:latest` | Docker 沙箱镜像名（仅 docker 模式） |
+| `SANDBOX_TIMEOUT` | `120` | 沙箱执行超时秒数 |
+| `SANDBOX_MEMORY` | `512m` | 沙箱容器内存限制（仅 docker 模式） |
+| `SANDBOX_CPUS` | `1` | 沙箱容器 CPU 限制（仅 docker 模式） |
+
+## Docker 沙箱（推荐自托管使用）
+
+自托管服务器建议开启 Docker 沙箱，每个策略脚本在独立容器中执行：
+
+```bash
+# 1. 构建沙箱镜像
+cd sandbox && bash build.sh
+
+# 2. 启用 docker 模式
+export SANDBOX_MODE=docker
+```
+
+安全措施：`--network=none` 断网 / `--memory=512m` / `--cpus=1` / `--read-only` / `--user=65534` 非root / `--cap-drop=ALL`
 
 ## 架构关系
 

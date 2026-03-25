@@ -645,7 +645,8 @@ def run_backtest(
     metrics = _sanitize_floats(metrics)
 
     if metrics_only:
-        return {"metrics": metrics, "trades": [], "equity_curve": []}
+        return {"metrics": metrics, "trades": [], "equity_curve": [],
+                "leverage": leverage, "margin_mode": config.get("margin_mode", "isolated")}
 
     formatted_trades = []
     running_balance = engine.account.initial_capital
@@ -655,6 +656,10 @@ def run_backtest(
         price = t.get("price", 0)
         qty = t.get("quantity", 0)
         pnl_pct = pnl / (price * qty / leverage) if price * qty > 0 else 0
+        trade_lev = t.get("leverage", leverage)
+        margin_used = t.get("margin_used", 0)
+        if margin_used == 0 and t.get("action") == "open":
+            margin_used = (price * qty / trade_lev) if trade_lev > 0 else (price * qty)
         formatted_trades.append({
             "trade_id": i + 1,
             "datetime": t.get("datetime", ""),
@@ -662,7 +667,9 @@ def run_backtest(
             "side": t.get("side", ""),
             "price": price,
             "quantity": qty,
-            "leverage": t.get("leverage", 1),
+            "leverage": trade_lev,
+            "margin_mode": config.get("margin_mode", "isolated"),
+            "margin_used": margin_used,
             "fee": t.get("commission", 0),
             "pnl": pnl,
             "pnl_pct": pnl_pct,
@@ -681,6 +688,8 @@ def run_backtest(
         "metrics": metrics,
         "trades": formatted_trades,
         "equity_curve": equity_curve_out,
+        "leverage": leverage,
+        "margin_mode": config.get("margin_mode", "isolated"),
     }
 
 

@@ -30,9 +30,14 @@ pip install -r requirements.txt
 echo "=== 4. 配置环境变量 ==="
 if [ ! -f .env ]; then
     cat > .env << 'ENVEOF'
-mysql_db={"host": "rm-gs56sqlmm8w52jn89.mysql.singapore.rds.aliyuncs.com", "port": 3306, "user": "app_admin", "password": ")8aX0FiCwDdPgEny", "db": "dex_quant"}
+MYSQL_HOST=your-mysql-host
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=your-password-here
+MYSQL_DB=dex_quant
 ENVEOF
-    echo ".env 文件已创建，请根据需要修改数据库配置"
+    echo "⚠️  .env 文件已创建，请编辑 .env 填入真实的数据库密码！"
+    echo "    vi $APP_DIR/.env"
 else
     echo ".env 文件已存在，跳过"
 fi

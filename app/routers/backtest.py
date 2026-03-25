@@ -44,7 +44,7 @@ from app.services.backtest_service import BacktestService
 from app.services.data_service import DataService
 from app import database
 from app.routers.auth import validate_token
-from app.core.script_executor import execute_strategy, ScriptSecurityError
+from app.core.script_executor import execute_strategy, ScriptSecurityError, execute_strategy_docker, get_sandbox_mode
 from app.core.optimizer import (
     ParameterSpace, GridSearch, GeneticOptimizer,
     RandomSearch, BayesianOptimizer, SimulatedAnnealing, ParticleSwarmOptimizer,
@@ -173,16 +173,29 @@ async def run_server_backtest(req: ServerBacktestRequest, x_token: str = Header(
         )
 
     try:
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                execute_strategy,
-                script_content=script,
-                mode="backtest",
-                start_date=req.start_date,
-                end_date=req.end_date,
-            ),
-            timeout=SCRIPT_TIMEOUT_SECONDS,
-        )
+        if get_sandbox_mode() == "docker":
+            result = await asyncio.wait_for(
+                execute_strategy_docker(
+                    script_content=script,
+                    mode="backtest",
+                    start_date=req.start_date,
+                    end_date=req.end_date,
+                    symbol=req.symbol,
+                    timeframe=req.timeframe,
+                ),
+                timeout=SCRIPT_TIMEOUT_SECONDS,
+            )
+        else:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    execute_strategy,
+                    script_content=script,
+                    mode="backtest",
+                    start_date=req.start_date,
+                    end_date=req.end_date,
+                ),
+                timeout=SCRIPT_TIMEOUT_SECONDS,
+            )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=408, detail=f"策略脚本执行超时（{SCRIPT_TIMEOUT_SECONDS}秒）")
     except ScriptSecurityError as e:
@@ -315,18 +328,33 @@ async def _run_backtest_job(job_id: str, script: str, strategy_name: str, req: S
     """后台执行回测任务，更新 _backtest_jobs 中的进度。"""
     job = _backtest_jobs[job_id]
     try:
-        logger.info(f"[{job_id}] 开始执行脚本 | mem={_mem_mb():.0f}MB")
-        job.update(stage="script_running", stage_label="正在执行策略脚本生成信号...", progress_pct=15)
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                execute_strategy,
-                script_content=script,
-                mode="backtest",
-                start_date=req.start_date,
-                end_date=req.end_date,
-            ),
-            timeout=SCRIPT_TIMEOUT_SECONDS,
-        )
+        sandbox_mode = get_sandbox_mode()
+        logger.info(f"[{job_id}] 开始执行脚本 | mode={sandbox_mode} | mem={_mem_mb():.0f}MB")
+        job.update(stage="script_running", stage_label=f"正在执行策略脚本生成信号（{sandbox_mode}模式）...", progress_pct=15)
+
+        if sandbox_mode == "docker":
+            result = await asyncio.wait_for(
+                execute_strategy_docker(
+                    script_content=script,
+                    mode="backtest",
+                    start_date=req.start_date,
+                    end_date=req.end_date,
+                    symbol=req.symbol,
+                    timeframe=req.timeframe,
+                ),
+                timeout=SCRIPT_TIMEOUT_SECONDS,
+            )
+        else:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    execute_strategy,
+                    script_content=script,
+                    mode="backtest",
+                    start_date=req.start_date,
+                    end_date=req.end_date,
+                ),
+                timeout=SCRIPT_TIMEOUT_SECONDS,
+            )
 
         signals = result.get("signals", [])
         logger.info(f"[{job_id}] 脚本完成 | 信号={len(signals)} | mem={_mem_mb():.0f}MB")

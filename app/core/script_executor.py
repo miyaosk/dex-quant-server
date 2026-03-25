@@ -1,7 +1,11 @@
 """
 策略脚本执行器 — 在沙箱中安全运行用户上传的策略脚本
 
-安全层级:
+执行模式 (SANDBOX_MODE):
+  process — 进程内沙箱（AST 扫描 + 受限 builtins），适合 Railway 等 PaaS
+  docker  — Docker 容器隔离（断网 + 内存限 + 非root），适合自托管服务器
+
+安全层级 (process 模式):
   1. AST 预扫描 — 拒绝包含危险 import / 属性访问的脚本
   2. 受限 builtins — 移除 open / exec / eval / compile 等
   3. 模块白名单 — 自定义 __import__ 只放行安全模块
@@ -238,3 +242,40 @@ def execute_strategy(
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = saved[name]
+
+
+# ── Docker 模式入口 ──────────────────────────────────
+
+async def execute_strategy_docker(
+    script_content: str,
+    mode: str = "backtest",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    symbol: str = "BTCUSDT",
+    timeframe: str = "4h",
+    params: Optional[dict] = None,
+) -> dict:
+    """
+    在 Docker 容器中执行策略脚本。
+
+    主服务先预拉 K 线数据，再传入容器。
+    容器完全断网 (--network=none)，无法访问外部。
+    """
+    from app.core.docker_executor import execute_in_docker, prefetch_klines
+
+    kline_data = await prefetch_klines(symbol, timeframe, start_date, end_date)
+
+    return await execute_in_docker(
+        script_content=script_content,
+        mode=mode,
+        start_date=start_date,
+        end_date=end_date,
+        kline_data=kline_data,
+        params=params,
+    )
+
+
+def get_sandbox_mode() -> str:
+    """返回当前沙箱执行模式。"""
+    import os
+    return os.getenv("SANDBOX_MODE", "process")
