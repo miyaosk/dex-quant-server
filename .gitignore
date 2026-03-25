@@ -40,3 +40,5 @@ data/
 *.sqlite
 *.sqlite3
 .env
+skills/
+.clawhub/
