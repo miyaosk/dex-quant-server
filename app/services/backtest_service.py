@@ -176,51 +176,114 @@ class BacktestService:
             }
 
     @staticmethod
-    def _evaluate_conclusion(metrics: dict) -> str:
+    def _evaluate_conclusion(metrics: dict) -> str | dict:
         """
-        综合评估回测结果，给出三选一结论。
+        综合评估回测结果。返回结论字符串，同时把评分细节写入 metrics。
 
-        approved:         核心指标全部达标
-        paper_trade_first: 部分指标不理想，建议先模拟观察
-        rejected:         指标太差或有明显问题
+        结论:
+          approved         — A/B 级，可以实盘或小仓实盘
+          paper_trade_first — C 级，建议先模拟观察
+          rejected         — D/F 级，不建议使用
+
+        评分标准 (每项 0-2 分，满分 14):
+          收益率:  >20% = 2,  >0% = 1,  <=0% = 0
+          Sharpe:  >1.5 = 2,  >0.5 = 1, <=0.5 = 0
+          回撤:    <10% = 2,  <20% = 1, >=20% = 0
+          胜率:    >50% = 2,  >35% = 1, <=35% = 0
+          盈亏比:  >1.5 = 2,  >1.0 = 1, <=1.0 = 0
+          交易数:  >=30 = 2,  >=10 = 1, <10 = 0
+          爆仓:    0次 = 2,   --       >0 = 0
+
+        等级:
+          A (12-14): 优秀策略 → approved
+          B (9-11):  良好策略 → approved
+          C (6-8):   及格策略 → paper_trade_first
+          D (3-5):   较差策略 → rejected
+          F (0-2):   失败策略 → rejected
         """
         if not metrics:
             return "rejected"
 
-        total_return_pct = metrics.get("total_return_pct", 0)
+        ret = metrics.get("total_return_pct", 0)
         sharpe = metrics.get("sharpe_ratio", 0)
         max_dd = abs(metrics.get("max_drawdown_pct", 0))
         win_rate = metrics.get("win_rate", 0)
-        total_trades = metrics.get("total_trades", 0)
-        liquidation_count = metrics.get("liquidation_count", 0)
+        plr = metrics.get("profit_loss_ratio", 0)
+        trades = metrics.get("total_trades", 0)
+        liquidations = metrics.get("liquidation_count", 0)
 
-        if liquidation_count > 0 or total_return_pct < -0.1:
-            return "rejected"
+        items = []
 
-        if total_trades < 5:
-            return "rejected"
+        # 收益率
+        s = 2 if ret > 0.20 else (1 if ret > 0 else 0)
+        items.append({"name": "收益率", "value": f"{ret:+.2%}",
+                       "score": s, "max": 2,
+                       "thresholds": ">20%=优 >0%=及格 ≤0%=差"})
 
-        score = 0
-        if total_return_pct > 0:
-            score += 1
-        if total_return_pct > 0.1:
-            score += 1
-        if sharpe > 1.0:
-            score += 1
-        if sharpe > 1.5:
-            score += 1
-        if max_dd < 0.2:
-            score += 1
-        if max_dd < 0.1:
-            score += 1
-        if win_rate > 0.4:
-            score += 1
-        if total_trades >= 30:
-            score += 1
+        # Sharpe
+        s = 2 if sharpe > 1.5 else (1 if sharpe > 0.5 else 0)
+        items.append({"name": "Sharpe", "value": f"{sharpe:.2f}",
+                       "score": s, "max": 2,
+                       "thresholds": ">1.5=优 >0.5=及格 ≤0.5=差"})
 
-        if score >= 6:
-            return "approved"
-        elif score >= 3:
-            return "paper_trade_first"
+        # 最大回撤
+        s = 2 if max_dd < 0.10 else (1 if max_dd < 0.20 else 0)
+        items.append({"name": "最大回撤", "value": f"{max_dd:.2%}",
+                       "score": s, "max": 2,
+                       "thresholds": "<10%=优 <20%=及格 ≥20%=差"})
+
+        # 胜率
+        s = 2 if win_rate > 0.50 else (1 if win_rate > 0.35 else 0)
+        items.append({"name": "胜率", "value": f"{win_rate:.1%}",
+                       "score": s, "max": 2,
+                       "thresholds": ">50%=优 >35%=及格 ≤35%=差"})
+
+        # 盈亏比
+        s = 2 if plr > 1.5 else (1 if plr > 1.0 else 0)
+        items.append({"name": "盈亏比", "value": f"{plr:.2f}",
+                       "score": s, "max": 2,
+                       "thresholds": ">1.5=优 >1.0=及格 ≤1.0=差"})
+
+        # 交易数
+        s = 2 if trades >= 30 else (1 if trades >= 10 else 0)
+        items.append({"name": "交易数", "value": str(trades),
+                       "score": s, "max": 2,
+                       "thresholds": "≥30=优 ≥10=及格 <10=差"})
+
+        # 爆仓
+        s = 2 if liquidations == 0 else 0
+        items.append({"name": "爆仓", "value": f"{liquidations}次",
+                       "score": s, "max": 2,
+                       "thresholds": "0次=优 >0=差"})
+
+        total_score = sum(i["score"] for i in items)
+        max_score = sum(i["max"] for i in items)
+
+        if total_score >= 12:
+            grade, conclusion = "A", "approved"
+        elif total_score >= 9:
+            grade, conclusion = "B", "approved"
+        elif total_score >= 6:
+            grade, conclusion = "C", "paper_trade_first"
+        elif total_score >= 3:
+            grade, conclusion = "D", "rejected"
         else:
-            return "rejected"
+            grade, conclusion = "F", "rejected"
+
+        grade_labels = {
+            "A": "优秀策略，可直接实盘",
+            "B": "良好策略，建议小仓实盘验证",
+            "C": "及格策略，建议先模拟观察",
+            "D": "较差策略，需要优化后再测",
+            "F": "失败策略，建议重新设计",
+        }
+
+        metrics["evaluation"] = {
+            "score": total_score,
+            "max_score": max_score,
+            "grade": grade,
+            "grade_label": grade_labels[grade],
+            "items": items,
+        }
+
+        return conclusion
