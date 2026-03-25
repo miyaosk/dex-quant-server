@@ -513,6 +513,10 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, space: ParameterS
 
     from app.core.backtest_engine import run_backtest as _run_bt
 
+    # 预构建 K 线缓存，所有评估复用同一份数据
+    kline_cache = {f"{req.symbol}:{req.timeframe}": df}
+    logger.info(f"[{job_id}] K线缓存已建 | {req.symbol}:{req.timeframe} {len(df)} 根")
+
     bt_config = {
         "symbol": req.symbol,
         "initial_capital": req.initial_capital,
@@ -538,6 +542,7 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, space: ParameterS
                         mode="backtest",
                         start_date=req.start_date,
                         end_date=req.end_date,
+                        cached_klines=kline_cache,
                     ),
                     timeout=OPTIMIZE_SCRIPT_TIMEOUT,
                 )
@@ -581,7 +586,7 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, space: ParameterS
         if method == "grid":
             grid = space.get_grid()
             job["total"] = len(grid)
-            all_results = await _run_grid_loop(job_id, job, grid, req, df, bt_config)
+            all_results = await _run_grid_loop(job_id, job, grid, req, df, bt_config, kline_cache=kline_cache)
         else:
             await asyncio.to_thread(_run_optimizer_sync, method, space, _evaluate, n_evals)
             all_results = _eval_cache
@@ -621,7 +626,7 @@ def _run_optimizer_sync(method: str, space: ParameterSpace, evaluate_fn, n_evals
     opt.run()
 
 
-async def _run_grid_loop(job_id, job, grid, req, df, bt_config) -> list[dict]:
+async def _run_grid_loop(job_id, job, grid, req, df, bt_config, kline_cache=None) -> list[dict]:
     """网格搜索保持原有逐步评估+实时进度的逻辑。"""
     from app.core.backtest_engine import run_backtest as _run_bt
 
@@ -636,6 +641,7 @@ async def _run_grid_loop(job_id, job, grid, req, df, bt_config) -> list[dict]:
                     mode="backtest",
                     start_date=req.start_date,
                     end_date=req.end_date,
+                    cached_klines=kline_cache,
                 ),
                 timeout=OPTIMIZE_SCRIPT_TIMEOUT,
             )

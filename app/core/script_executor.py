@@ -128,6 +128,7 @@ def execute_strategy(
     mode: str = "backtest",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    cached_klines: Optional[dict] = None,
 ) -> dict:
     """
     在沙箱中执行策略脚本的 generate_signals()。
@@ -151,8 +152,43 @@ def execute_strategy(
     from app.core import data_client as server_dc
     from app.core import indicators as server_ind
 
+    if cached_klines:
+        class CachedDataClient(server_dc.DataClient):
+            """优化模式：返回缓存的 K 线，避免重复 API 请求。"""
+            def __init__(self, **kwargs):
+                pass  # 不创建 httpx client
+
+            def get_perp_klines(self, symbol, interval="1d", start_date=None, end_date=None, **kw):
+                interval = kw.get("timeframe") or kw.get("period") or interval
+                key = f"{symbol}:{interval}"
+                if key in cached_klines:
+                    return cached_klines[key].copy()
+                return super().__init__() or server_dc.DataClient().get_perp_klines(
+                    symbol, interval, start_date, end_date
+                )
+
+            def get_spot_klines(self, symbol, interval="1d", start_date=None, end_date=None, **kw):
+                interval = kw.get("timeframe") or kw.get("period") or interval
+                key = f"{symbol}:{interval}:spot"
+                if key in cached_klines:
+                    return cached_klines[key].copy()
+                return server_dc.DataClient().get_spot_klines(
+                    symbol, interval, start_date, end_date
+                )
+
+            get_ohlcv = get_perp_klines
+            get_klines = get_perp_klines
+            get_candles = get_perp_klines
+            fetch_ohlcv = get_perp_klines
+
+            def close(self): pass
+
+        dc_class = CachedDataClient
+    else:
+        dc_class = server_dc.DataClient
+
     fake_data_client = types.ModuleType("data_client")
-    fake_data_client.DataClient = server_dc.DataClient
+    fake_data_client.DataClient = dc_class
 
     fake_indicators = types.ModuleType("indicators")
     fake_indicators.Indicators = server_ind.Indicators
