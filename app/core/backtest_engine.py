@@ -433,6 +433,7 @@ def run_backtest(
     df: pd.DataFrame,
     signals: list[dict],
     config: dict,
+    metrics_only: bool = False,
 ) -> dict:
     """
     信号驱动回测。
@@ -443,6 +444,7 @@ def run_backtest(
                   reason, price_at_signal, suggested_stop_loss, suggested_take_profit}]
         config: 回测配置 {symbol, initial_capital, leverage, fee_rate,
                 slippage_bps, margin_mode, direction, risk_per_trade}
+        metrics_only: True 时跳过交易记录和权益曲线输出（优化模式）
 
     返回:
         {metrics, trades, equity_curve}
@@ -617,6 +619,34 @@ def run_backtest(
     peak_balance = float(np.max([e["equity"] for e in eq_data])) if eq_data else final_balance
     avg_hold = float(np.mean(holding_bars)) if holding_bars else 0.0
 
+    metrics = {
+        "total_return": perf.get("total_return", 0) * engine.account.initial_capital,
+        "total_return_pct": perf.get("total_return", 0),
+        "annual_return_pct": perf.get("annual_return", 0),
+        "sharpe_ratio": perf.get("sharpe_ratio", 0),
+        "sortino_ratio": perf.get("sortino_ratio", 0),
+        "max_drawdown_pct": perf.get("max_drawdown", 0),
+        "calmar_ratio": perf.get("calmar_ratio", 0),
+        "win_rate": win_rate,
+        "profit_loss_ratio": profit_loss_ratio,
+        "total_trades": len(trades_raw),
+        "winning_trades": len(wins),
+        "losing_trades": len(losses_list),
+        "avg_holding_bars": avg_hold,
+        "total_commission": perf.get("total_commission", 0),
+        "total_slippage_cost": perf.get("total_slippage_cost", 0),
+        "net_funding": perf.get("net_funding", 0),
+        "liquidation_count": perf.get("liquidation_count", 0),
+        "final_balance": final_balance,
+        "peak_balance": peak_balance,
+        "total_signals": len(signals),
+        "signals_executed": signals_executed,
+    }
+    metrics = _sanitize_floats(metrics)
+
+    if metrics_only:
+        return {"metrics": metrics, "trades": [], "equity_curve": []}
+
     formatted_trades = []
     running_balance = engine.account.initial_capital
     for i, t in enumerate(trades_raw):
@@ -644,32 +674,6 @@ def run_backtest(
         {"datetime": e["datetime"], "equity": e["equity"]}
         for e in eq_data
     ]
-
-    metrics = {
-        "total_return": perf.get("total_return", 0) * engine.account.initial_capital,
-        "total_return_pct": perf.get("total_return", 0),
-        "annual_return_pct": perf.get("annual_return", 0),
-        "sharpe_ratio": perf.get("sharpe_ratio", 0),
-        "sortino_ratio": perf.get("sortino_ratio", 0),
-        "max_drawdown_pct": perf.get("max_drawdown", 0),
-        "calmar_ratio": perf.get("calmar_ratio", 0),
-        "win_rate": win_rate,
-        "profit_loss_ratio": profit_loss_ratio,
-        "total_trades": len(trades_raw),
-        "winning_trades": len(wins),
-        "losing_trades": len(losses_list),
-        "avg_holding_bars": avg_hold,
-        "total_commission": perf.get("total_commission", 0),
-        "total_slippage_cost": perf.get("total_slippage_cost", 0),
-        "net_funding": perf.get("net_funding", 0),
-        "liquidation_count": perf.get("liquidation_count", 0),
-        "final_balance": final_balance,
-        "peak_balance": peak_balance,
-        "total_signals": len(signals),
-        "signals_executed": signals_executed,
-    }
-
-    metrics = _sanitize_floats(metrics)
     formatted_trades = [_sanitize_floats(t) for t in formatted_trades]
     equity_curve_out = [_sanitize_floats(e) for e in equity_curve_out]
 

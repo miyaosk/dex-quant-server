@@ -12,6 +12,7 @@
 """
 
 import asyncio
+import gc
 import json
 import re
 import time
@@ -554,7 +555,7 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, space: ParameterS
             job["completed"] += 1
             return float("-inf")
 
-        bt_result = _run_bt(df=df, signals=signals, config=bt_config)
+        bt_result = _run_bt(df=df, signals=signals, config=bt_config, metrics_only=True)
         metrics = bt_result.get("metrics", {})
 
         fitness = metrics.get(req.fitness_metric, 0)
@@ -568,6 +569,10 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, space: ParameterS
             job["current_best_params"] = params.copy()
 
         _eval_cache.append({"params": params.copy(), "fitness": fitness, "metrics": metrics})
+
+        if job["completed"] % 10 == 0:
+            gc.collect()
+
         return fitness
 
     _eval_cache: list[dict] = []
@@ -640,7 +645,7 @@ async def _run_grid_loop(job_id, job, grid, req, df, bt_config) -> list[dict]:
                 job["completed"] += 1
                 continue
 
-            bt_result = _run_bt(df=df, signals=signals, config=bt_config)
+            bt_result = _run_bt(df=df, signals=signals, config=bt_config, metrics_only=True)
             metrics = bt_result.get("metrics", {})
 
             fitness = metrics.get(req.fitness_metric, 0)
@@ -658,6 +663,9 @@ async def _run_grid_loop(job_id, job, grid, req, df, bt_config) -> list[dict]:
             job["failed"] += 1
 
         job["completed"] += 1
+
+        if (i + 1) % 10 == 0:
+            gc.collect()
 
         if (i + 1) % max(1, len(grid) // 10) == 0:
             logger.info(
