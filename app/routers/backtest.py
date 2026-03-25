@@ -38,12 +38,40 @@ from app.core.optimizer import (
 
 SCRIPT_TIMEOUT_SECONDS = 120
 OPTIMIZE_SCRIPT_TIMEOUT = 60
+JOB_TTL_SECONDS = 600          # 已完成的 job 保留 10 分钟后清理
+JOB_MAX_KEPT = 20              # 最多保留最近 20 个已完成的 job
 
 # 内存中的任务状态（进程级别，Railway 单实例足够）
 _optimize_jobs: dict[str, dict] = {}
 _backtest_jobs: dict[str, dict] = {}
 
 router = APIRouter(prefix="/backtest", tags=["回测"])
+
+
+def _evict_old_jobs(store: dict[str, dict], max_kept: int = JOB_MAX_KEPT, ttl: float = JOB_TTL_SECONDS):
+    """清理已完成/失败的过期 job，防止内存无限增长。"""
+    now = time.time()
+    to_delete = []
+    finished = []
+
+    for jid, job in store.items():
+        if job.get("status") in ("completed", "failed"):
+            finish_time = job.get("start_ts", 0) + job.get("elapsed_ms", 0) / 1000
+            finished.append((jid, finish_time))
+            if now - finish_time > ttl:
+                to_delete.append(jid)
+
+    if len(finished) > max_kept:
+        finished.sort(key=lambda x: x[1])
+        for jid, _ in finished[: len(finished) - max_kept]:
+            if jid not in to_delete:
+                to_delete.append(jid)
+
+    for jid in to_delete:
+        store.pop(jid, None)
+
+    if to_delete:
+        logger.debug(f"清理过期 job: {len(to_delete)} 个, 剩余 {len(store)} 个")
 
 
 def _build_backtest_service() -> tuple[BacktestService, DataService]:
@@ -214,6 +242,8 @@ async def submit_server_backtest(req: ServerBacktestRequest, x_token: str = Head
     if not script:
         raise HTTPException(status_code=400, detail="需要提供 script_content 或有效的 strategy_id")
 
+    _evict_old_jobs(_backtest_jobs)
+
     job_id = f"bt_{uuid.uuid4().hex[:12]}"
     _backtest_jobs[job_id] = {
         "status": "running",
@@ -317,6 +347,12 @@ async def _run_backtest_job(job_id: str, script: str, strategy_name: str, req: S
 
             job.update(stage="calculating", stage_label="计算绩效指标...", progress_pct=90)
 
+            # 权益曲线降采样：超过 500 点时等距取 500 个，减少内存和传输
+            equity = bt_result.get("equity_curve", [])
+            if len(equity) > 500:
+                step = len(equity) / 500
+                bt_result["equity_curve"] = [equity[int(i * step)] for i in range(500)]
+
             job.update(
                 status="completed",
                 stage="done",
@@ -326,6 +362,8 @@ async def _run_backtest_job(job_id: str, script: str, strategy_name: str, req: S
                 result=bt_result,
             )
             logger.info(f"[{job_id}] 异步回测完成 | 耗时 {job['elapsed_ms']}ms")
+
+            _evict_old_jobs(_backtest_jobs)
 
         finally:
             ds.close()
@@ -375,6 +413,8 @@ async def optimize_strategy(req: OptimizeRequest, x_token: str = Header(default=
         n_evals = len(grid)
     else:
         n_evals = min(req.max_combinations, space.total_combinations)
+
+    _evict_old_jobs(_optimize_jobs)
 
     job_id = f"opt_{uuid.uuid4().hex[:12]}"
     _optimize_jobs[job_id] = {
@@ -549,6 +589,7 @@ async def _run_optimize_job(job_id: str, req: OptimizeRequest, space: ParameterS
 
     ds.close()
     _finalize_job(job_id, job, all_results)
+    _evict_old_jobs(_optimize_jobs)
 
 
 def _run_optimizer_sync(method: str, space: ParameterSpace, evaluate_fn, n_evals: int):
