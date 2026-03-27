@@ -1,7 +1,7 @@
 """
 策略监控 API — 服务器端定时执行策略、生成信号
 
-配额：每个用户（machine_code）免费 3 个监控任务。
+限制：每个用户同时最多运行 3 个策略监控，超出需在本地运行。
 
   1. POST /monitor/start      — 启动监控（上传脚本+配置）
   2. GET  /monitor/list        — 列出我的监控任务
@@ -91,7 +91,7 @@ async def start_monitor(req: MonitorStartRequest, x_token: str = Header(default=
     if active_count >= FREE_MONITOR_SLOTS:
         raise HTTPException(
             status_code=429,
-            detail=f"已达免费配额上限（{FREE_MONITOR_SLOTS} 个），请先停止一个监控任务",
+            detail=f"同时最多运行 {FREE_MONITOR_SLOTS} 个策略监控，请先停止一个或改用本地运行",
         )
 
     if req.interval_seconds < 60:
@@ -128,7 +128,7 @@ async def start_monitor(req: MonitorStartRequest, x_token: str = Header(default=
 
     logger.info(
         f"[{job_id}] 监控已启动 | {req.strategy_name} | {req.symbol} {req.timeframe} "
-        f"| 间隔={req.interval_seconds}s | 用户配额 {active_count+1}/{FREE_MONITOR_SLOTS}"
+        f"| 间隔={req.interval_seconds}s | 已用 {active_count+1}/{FREE_MONITOR_SLOTS}"
     )
 
     return {
