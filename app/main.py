@@ -20,6 +20,11 @@ from app.routers import auth, data, strategy, backtest, signal, monitor
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init_db()
+
+    from app.routers.monitor import restore_running_monitors, start_daily_report_scheduler
+    await restore_running_monitors()
+    start_daily_report_scheduler()
+
     import resource, os
     ru = resource.getrusage(resource.RUSAGE_SELF)
     rss = ru.ru_maxrss / 1024 if os.uname().sysname != "Darwin" else ru.ru_maxrss / (1024 * 1024)

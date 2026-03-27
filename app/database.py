@@ -2,11 +2,13 @@
 数据库层 — 信号驱动架构的 MySQL 表结构
 
 表:
-  dex_machine_tokens   — 机器码 → Token 映射（免费 3 策略配额）
+  dex_machine_tokens   — 机器码 → Token 映射
   dex_strategies       — 策略定义（含脚本源码，关联 machine_code）
   dex_backtest_results — 回测结果（含信号快照）
   dex_kline_cache      — K 线缓存
   dex_signals          — 策略信号记录
+  dex_monitor_jobs     — 监控任务（持久化，重启可恢复）
+  dex_daily_reports    — 每日策略统计报告
 """
 
 from __future__ import annotations
@@ -116,6 +118,72 @@ _CREATE_TABLES_SQL = [
         INDEX idx_timestamp (timestamp),
         INDEX idx_created (created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略信号表'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS dex_monitor_jobs (
+        job_id VARCHAR(64) PRIMARY KEY COMMENT '监控任务ID',
+        machine_code VARCHAR(64) NOT NULL COMMENT '所属用户',
+        strategy_name VARCHAR(255) DEFAULT '' COMMENT '策略名称',
+        script_content LONGTEXT NOT NULL COMMENT '策略脚本源码',
+        symbol VARCHAR(64) DEFAULT 'BTCUSDT' COMMENT '交易对',
+        timeframe VARCHAR(16) DEFAULT '4h' COMMENT 'K线周期',
+        interval_seconds INT DEFAULT 14400 COMMENT '执行间隔（秒）',
+        risk_rules JSON COMMENT '风控规则',
+        status VARCHAR(32) DEFAULT 'running' COMMENT 'running/stopped/error',
+        total_cycles INT DEFAULT 0 COMMENT '已执行轮次',
+        total_signals INT DEFAULT 0 COMMENT '累计可执行信号数',
+        last_run_at DATETIME COMMENT '最后执行时间',
+        last_error TEXT COMMENT '最后一次错误',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        INDEX idx_machine (machine_code),
+        INDEX idx_status (status),
+        INDEX idx_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略监控任务表'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS dex_monitor_signals (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        job_id VARCHAR(64) NOT NULL COMMENT '关联监控任务',
+        cycle_num INT DEFAULT 0 COMMENT '第几轮产生的',
+        timestamp VARCHAR(64) NOT NULL COMMENT '信号时间戳',
+        symbol VARCHAR(64) NOT NULL COMMENT '交易对',
+        action VARCHAR(16) NOT NULL COMMENT 'buy/sell',
+        direction VARCHAR(16) DEFAULT 'long' COMMENT 'long/short',
+        confidence DOUBLE DEFAULT 1.0 COMMENT '置信度',
+        reason TEXT COMMENT '触发原因',
+        price_at_signal DOUBLE DEFAULT 0 COMMENT '信号时价格',
+        suggested_stop_loss DOUBLE COMMENT '建议止损',
+        suggested_take_profit DOUBLE COMMENT '建议止盈',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '入库时间',
+        INDEX idx_job (job_id),
+        INDEX idx_symbol (symbol),
+        INDEX idx_action (action),
+        INDEX idx_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='监控产生的信号记录'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS dex_daily_reports (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        report_date DATE NOT NULL COMMENT '报告日期',
+        job_id VARCHAR(64) NOT NULL COMMENT '关联监控任务',
+        machine_code VARCHAR(64) NOT NULL COMMENT '所属用户',
+        strategy_name VARCHAR(255) DEFAULT '' COMMENT '策略名称',
+        symbol VARCHAR(64) DEFAULT '' COMMENT '交易对',
+        timeframe VARCHAR(16) DEFAULT '' COMMENT 'K线周期',
+        cycles_today INT DEFAULT 0 COMMENT '当日执行轮次',
+        signals_today INT DEFAULT 0 COMMENT '当日信号数',
+        buy_signals INT DEFAULT 0 COMMENT '买入信号数',
+        sell_signals INT DEFAULT 0 COMMENT '卖出信号数',
+        avg_confidence DOUBLE DEFAULT 0 COMMENT '平均置信度',
+        status VARCHAR(32) DEFAULT '' COMMENT '任务状态',
+        metrics_json JSON COMMENT '当日绩效指标（模拟盈亏等）',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '报告生成时间',
+        UNIQUE KEY uk_date_job (report_date, job_id),
+        INDEX idx_machine (machine_code),
+        INDEX idx_date (report_date),
+        INDEX idx_job (job_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日策略统计报告'
     """,
 ]
 
@@ -382,6 +450,209 @@ async def list_strategies_by_machine(machine_code: str) -> list[dict]:
         "SELECT strategy_id, name, symbol, timeframe, version, status, created_at, updated_at "
         "FROM dex_strategies WHERE machine_code = %s AND status != 'archived' ORDER BY updated_at DESC",
         (machine_code,),
+        True,
+    )
+    return rows
+
+
+# ═══════════════════════════════════════════
+#  监控任务
+# ═══════════════════════════════════════════
+
+
+async def save_monitor_job(job: dict) -> None:
+    data = {
+        "job_id": job["job_id"],
+        "machine_code": job["machine_code"],
+        "strategy_name": job.get("strategy_name", ""),
+        "script_content": job["script_content"],
+        "symbol": job.get("symbol", "BTCUSDT"),
+        "timeframe": job.get("timeframe", "4h"),
+        "interval_seconds": job.get("interval_seconds", 14400),
+        "risk_rules": json.dumps(job.get("risk_rules", {}), ensure_ascii=False),
+        "status": job.get("status", "running"),
+        "total_cycles": job.get("total_cycles", 0),
+        "total_signals": job.get("total_signals", 0),
+        "last_run_at": job.get("last_run_at") or None,
+        "last_error": job.get("last_error", ""),
+    }
+    await asyncio.to_thread(mysql.upsert, data, "dex_monitor_jobs")
+
+
+async def update_monitor_status(job_id: str, **kwargs) -> None:
+    sets = []
+    params = []
+    for k, v in kwargs.items():
+        sets.append(f"{k} = %s")
+        params.append(v)
+    if not sets:
+        return
+    params.append(job_id)
+    sql = f"UPDATE dex_monitor_jobs SET {', '.join(sets)} WHERE job_id = %s"
+    await asyncio.to_thread(mysql.execute_sql, sql, tuple(params))
+
+
+async def get_monitor_job(job_id: str) -> Optional[dict]:
+    rows = await asyncio.to_thread(
+        mysql.select_where, "dex_monitor_jobs", {"job_id": job_id}, True
+    )
+    return rows[0] if rows else None
+
+
+async def list_monitor_jobs_by_machine(machine_code: str) -> list[dict]:
+    rows = await asyncio.to_thread(
+        mysql.execute_sql,
+        "SELECT job_id, machine_code, strategy_name, symbol, timeframe, interval_seconds, "
+        "status, total_cycles, total_signals, last_run_at, last_error, created_at "
+        "FROM dex_monitor_jobs WHERE machine_code = %s ORDER BY created_at DESC",
+        (machine_code,),
+        True,
+    )
+    return rows
+
+
+async def list_running_monitor_jobs() -> list[dict]:
+    """获取所有状态为 running 的监控任务（服务器启动时恢复用）。"""
+    rows = await asyncio.to_thread(
+        mysql.execute_sql,
+        "SELECT * FROM dex_monitor_jobs WHERE status = 'running'",
+        None,
+        True,
+    )
+    return rows
+
+
+async def count_running_monitors_by_machine(machine_code: str) -> int:
+    rows = await asyncio.to_thread(
+        mysql.execute_sql,
+        "SELECT COUNT(*) as cnt FROM dex_monitor_jobs WHERE machine_code = %s AND status = 'running'",
+        (machine_code,),
+        True,
+    )
+    return rows[0]["cnt"] if rows else 0
+
+
+# ═══════════════════════════════════════════
+#  监控信号记录
+# ═══════════════════════════════════════════
+
+
+async def save_monitor_signals(job_id: str, cycle_num: int, signals: list[dict]) -> None:
+    if not signals:
+        return
+
+    sql = (
+        "INSERT INTO dex_monitor_signals "
+        "(job_id, cycle_num, timestamp, symbol, action, direction, confidence, "
+        "reason, price_at_signal, suggested_stop_loss, suggested_take_profit) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    )
+    rows = []
+    for s in signals:
+        rows.append((
+            job_id, cycle_num,
+            s.get("timestamp", ""),
+            s.get("symbol", ""),
+            s.get("action", ""),
+            s.get("direction", "long"),
+            s.get("confidence", 1.0),
+            s.get("reason", "")[:500],
+            s.get("price_at_signal", 0),
+            s.get("suggested_stop_loss"),
+            s.get("suggested_take_profit"),
+        ))
+
+    def _batch_insert():
+        for row in rows:
+            mysql.execute_sql(sql, row)
+
+    await asyncio.to_thread(_batch_insert)
+
+
+async def get_monitor_signals(job_id: str, limit: int = 50) -> list[dict]:
+    rows = await asyncio.to_thread(
+        mysql.execute_sql,
+        "SELECT * FROM dex_monitor_signals WHERE job_id = %s ORDER BY created_at DESC LIMIT %s",
+        (job_id, limit),
+        True,
+    )
+    return rows
+
+
+async def get_monitor_signals_today(job_id: str) -> list[dict]:
+    rows = await asyncio.to_thread(
+        mysql.execute_sql,
+        "SELECT * FROM dex_monitor_signals WHERE job_id = %s AND DATE(created_at) = CURDATE() "
+        "ORDER BY created_at DESC",
+        (job_id,),
+        True,
+    )
+    return rows
+
+
+# ═══════════════════════════════════════════
+#  每日报告
+# ═══════════════════════════════════════════
+
+
+async def save_daily_report(report: dict) -> None:
+    data = {
+        "report_date": report["report_date"],
+        "job_id": report["job_id"],
+        "machine_code": report["machine_code"],
+        "strategy_name": report.get("strategy_name", ""),
+        "symbol": report.get("symbol", ""),
+        "timeframe": report.get("timeframe", ""),
+        "cycles_today": report.get("cycles_today", 0),
+        "signals_today": report.get("signals_today", 0),
+        "buy_signals": report.get("buy_signals", 0),
+        "sell_signals": report.get("sell_signals", 0),
+        "avg_confidence": report.get("avg_confidence", 0),
+        "status": report.get("status", ""),
+        "metrics_json": json.dumps(report.get("metrics", {}), ensure_ascii=False, default=str),
+    }
+    await asyncio.to_thread(mysql.upsert, data, "dex_daily_reports")
+
+
+async def list_daily_reports(
+    machine_code: str = None,
+    job_id: str = None,
+    start_date: str = None,
+    end_date: str = None,
+    limit: int = 30,
+) -> list[dict]:
+    conditions = []
+    params = []
+    if machine_code:
+        conditions.append("machine_code = %s")
+        params.append(machine_code)
+    if job_id:
+        conditions.append("job_id = %s")
+        params.append(job_id)
+    if start_date:
+        conditions.append("report_date >= %s")
+        params.append(start_date)
+    if end_date:
+        conditions.append("report_date <= %s")
+        params.append(end_date)
+
+    where = " AND ".join(conditions) if conditions else "1=1"
+    sql = f"SELECT * FROM dex_daily_reports WHERE {where} ORDER BY report_date DESC, strategy_name LIMIT %s"
+    params.append(limit)
+
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, tuple(params), True)
+    return rows
+
+
+async def list_all_running_jobs_for_report() -> list[dict]:
+    """获取所有运行中/已停止的监控任务（用于每日报告统计）。"""
+    rows = await asyncio.to_thread(
+        mysql.execute_sql,
+        "SELECT job_id, machine_code, strategy_name, symbol, timeframe, status, "
+        "total_cycles, total_signals, created_at "
+        "FROM dex_monitor_jobs WHERE status IN ('running', 'stopped', 'error') "
+        "ORDER BY machine_code, created_at",
+        None,
         True,
     )
     return rows

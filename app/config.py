@@ -45,3 +45,5 @@ API_PREFIX: str = os.getenv("API_PREFIX", "/api/v1")
 # docker  = Docker 容器隔离（断网 + 内存限 + 非root），默认推荐
 # process = 进程内沙箱（AST 扫描 + 受限 builtins），用于无 Docker 环境（如 Railway PaaS）
 SANDBOX_MODE: str = os.getenv("SANDBOX_MODE", "docker")
+
+ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
