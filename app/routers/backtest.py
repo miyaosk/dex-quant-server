@@ -763,14 +763,18 @@ def _finalize_job(job_id: str, job: dict, all_results: list[dict]):
 
 
 def _inject_params(script: str, params: dict) -> str:
-    """将 PARAMS 字典注入到脚本头部。"""
-    params_line = f"PARAMS = {repr(params)}\n"
-    if "PARAMS" in script:
-        script = re.sub(r'^PARAMS\s*=\s*\{[^}]*\}', params_line.strip(), script, count=1, flags=re.MULTILINE)
-        if params_line.strip() not in script:
-            script = params_line + script
+    """将优化参数合并到脚本的 PARAMS 字典中（保留未优化的原始 key）。"""
+    match = re.search(r'^PARAMS\s*=\s*(\{[^}]*\})', script, flags=re.MULTILINE | re.DOTALL)
+    if match:
+        try:
+            original = eval(match.group(1))
+        except Exception:
+            original = {}
+        merged = {**original, **params}
+        merged_line = f"PARAMS = {repr(merged)}"
+        script = script[:match.start()] + merged_line + script[match.end():]
     else:
-        script = params_line + script
+        script = f"PARAMS = {repr(params)}\n" + script
     return script
 
 
