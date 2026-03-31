@@ -84,6 +84,8 @@ async def create_setup_link(request: Request, record: dict = Header(None)):
     await database.create_vault_token(token, machine_code, expires_at)
 
     base_url = str(request.base_url).rstrip("/")
+    if base_url.startswith("http://") and ".up.railway.app" in base_url:
+        base_url = base_url.replace("http://", "https://", 1)
     url = f"{base_url}/api/v1/vault/page?token={token}"
 
     logger.info(f"Vault setup link created | machine={machine_code[:8]}... | expires={expires_at}")
