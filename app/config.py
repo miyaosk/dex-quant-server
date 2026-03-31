@@ -47,3 +47,4 @@ API_PREFIX: str = os.getenv("API_PREFIX", "/api/v1")
 SANDBOX_MODE: str = os.getenv("SANDBOX_MODE", "docker")
 
 ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
+VAULT_MASTER_KEY: str = os.getenv("VAULT_MASTER_KEY", "")

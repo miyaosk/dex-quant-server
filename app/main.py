@@ -14,7 +14,7 @@ from loguru import logger
 
 from app import database
 from app import config
-from app.routers import auth, data, strategy, backtest, signal, monitor
+from app.routers import auth, data, strategy, backtest, signal, monitor, vault
 
 
 @asynccontextmanager
@@ -74,6 +74,7 @@ app.include_router(strategy.router, prefix=config.API_PREFIX)
 app.include_router(backtest.router, prefix=config.API_PREFIX)
 app.include_router(signal.router, prefix=config.API_PREFIX)
 app.include_router(monitor.router, prefix=config.API_PREFIX)
+app.include_router(vault.router, prefix=config.API_PREFIX)
 
 
 @app.get("/health")

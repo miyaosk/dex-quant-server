@@ -9,6 +9,8 @@
   dex_signals          — 策略信号记录
   dex_monitor_jobs     — 监控任务（持久化，重启可恢复）
   dex_daily_reports    — 每日策略统计报告
+  dex_vault_keys       — 加密存储的交易私钥
+  dex_vault_tokens     — 一次性密钥提交链接 token
 """
 
 from __future__ import annotations
@@ -184,6 +186,35 @@ _CREATE_TABLES_SQL = [
         INDEX idx_date (report_date),
         INDEX idx_job (job_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日策略统计报告'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS dex_vault_keys (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        machine_code VARCHAR(128) NOT NULL COMMENT '所属用户',
+        key_name VARCHAR(64) NOT NULL DEFAULT 'hyperliquid' COMMENT '密钥用途标识',
+        encrypted_key TEXT NOT NULL COMMENT 'AES-GCM 加密后的私钥 (base64)',
+        iv VARCHAR(64) NOT NULL COMMENT '初始化向量 (base64)',
+        tag VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'GCM 认证标签 (base64)',
+        network VARCHAR(32) NOT NULL DEFAULT 'mainnet' COMMENT 'mainnet / testnet',
+        status VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'active / revoked',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_machine_key (machine_code, key_name),
+        INDEX idx_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='加密存储的交易私钥'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS dex_vault_tokens (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        token VARCHAR(128) NOT NULL COMMENT '一次性提交 token',
+        machine_code VARCHAR(128) NOT NULL COMMENT '关联用户',
+        used TINYINT DEFAULT 0 COMMENT '0=未使用 1=已使用',
+        expires_at DATETIME NOT NULL COMMENT '过期时间',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_token (token),
+        INDEX idx_machine (machine_code),
+        INDEX idx_expires (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='一次性密钥提交链接 token'
     """,
 ]
 
@@ -656,3 +687,67 @@ async def list_all_running_jobs_for_report() -> list[dict]:
         True,
     )
     return rows
+
+
+# ═══════════════════════════════════════════
+#  Vault — 密钥保险箱
+# ═══════════════════════════════════════════
+
+
+async def create_vault_token(token: str, machine_code: str, expires_at: str) -> None:
+    data = {"token": token, "machine_code": machine_code, "expires_at": expires_at, "used": 0}
+    await asyncio.to_thread(mysql.upsert, data, "dex_vault_tokens")
+
+
+async def get_vault_token(token: str) -> Optional[dict]:
+    rows = await asyncio.to_thread(
+        mysql.select_where, "dex_vault_tokens", {"token": token}, True
+    )
+    return rows[0] if rows else None
+
+
+async def mark_vault_token_used(token: str) -> None:
+    await asyncio.to_thread(
+        mysql.execute_sql,
+        "UPDATE dex_vault_tokens SET used = 1 WHERE token = %s",
+        (token,),
+    )
+
+
+async def save_vault_key(
+    machine_code: str,
+    encrypted_key: str,
+    iv: str,
+    tag: str,
+    network: str = "mainnet",
+    key_name: str = "hyperliquid",
+) -> None:
+    data = {
+        "machine_code": machine_code,
+        "key_name": key_name,
+        "encrypted_key": encrypted_key,
+        "iv": iv,
+        "tag": tag,
+        "network": network,
+        "status": "active",
+    }
+    await asyncio.to_thread(mysql.upsert, data, "dex_vault_keys")
+
+
+async def get_vault_key(machine_code: str, key_name: str = "hyperliquid") -> Optional[dict]:
+    rows = await asyncio.to_thread(
+        mysql.execute_sql,
+        "SELECT * FROM dex_vault_keys WHERE machine_code = %s AND key_name = %s AND status = 'active'",
+        (machine_code, key_name),
+        True,
+    )
+    return rows[0] if rows else None
+
+
+async def delete_vault_key(machine_code: str, key_name: str = "hyperliquid") -> bool:
+    await asyncio.to_thread(
+        mysql.execute_sql,
+        "UPDATE dex_vault_keys SET status = 'revoked' WHERE machine_code = %s AND key_name = %s",
+        (machine_code, key_name),
+    )
+    return True
