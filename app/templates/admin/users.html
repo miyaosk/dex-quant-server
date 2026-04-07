@@ -1,0 +1,55 @@
+{% extends "admin/base.html" %}
+{% block title %}用户管理{% endblock %}
+{% block page_title %}用户管理{% endblock %}
+{% block sidebar_users %}active{% endblock %}
+
+{% block content %}
+<div class="glass rounded-xl overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-xs text-slate-400 uppercase bg-surface-2">
+                    <th class="px-4 py-3 text-left">ID</th>
+                    <th class="px-4 py-3 text-left">机器码</th>
+                    <th class="px-4 py-3 text-left">Token</th>
+                    <th class="px-4 py-3 text-center">配额</th>
+                    <th class="px-4 py-3 text-center">策略数</th>
+                    <th class="px-4 py-3 text-center">运行监控</th>
+                    <th class="px-4 py-3 text-center">状态</th>
+                    <th class="px-4 py-3 text-right">注册时间</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                <tr class="border-t border-slate-800/50">
+                    <td class="px-4 py-3 text-slate-500">{{ u.id }}</td>
+                    <td class="px-4 py-3 font-mono text-xs">{{ u.machine_code[:16] }}...</td>
+                    <td class="px-4 py-3 font-mono text-xs text-slate-400">{{ u.token[:12] }}...</td>
+                    <td class="px-4 py-3 text-center">{{ u.max_strategies }}</td>
+                    <td class="px-4 py-3 text-center font-mono">{{ u.strategy_count }}</td>
+                    <td class="px-4 py-3 text-center">
+                        {% if u.running_monitors > 0 %}
+                        <span class="font-mono text-profit">{{ u.running_monitors }}</span>
+                        {% else %}
+                        <span class="text-slate-500">0</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        {% if u.status == 'active' %}
+                        <span class="tag tag-profit">活跃</span>
+                        {% else %}
+                        <span class="tag tag-loss">{{ u.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ u.created_at[:19] if u.created_at else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if not users %}
+<div class="text-center py-12 text-slate-400">暂无注册用户</div>
+{% endif %}
+{% endblock %}

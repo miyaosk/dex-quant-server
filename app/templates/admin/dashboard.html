@@ -1,0 +1,85 @@
+{% extends "admin/base.html" %}
+{% block title %}数据概览{% endblock %}
+{% block page_title %}数据概览{% endblock %}
+{% block sidebar_dashboard %}active{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    <div class="glass rounded-xl p-5 stat-card">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-sm text-slate-400">注册用户</span>
+            <svg class="w-5 h-5 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+        </div>
+        <div class="text-3xl font-bold">{{ stats.total_users }}</div>
+        <div class="text-xs text-slate-500 mt-1">活跃 {{ stats.active_users }}</div>
+    </div>
+
+    <div class="glass rounded-xl p-5 stat-card">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-sm text-slate-400">策略总数</span>
+            <svg class="w-5 h-5 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        </div>
+        <div class="text-3xl font-bold">{{ stats.total_strategies }}</div>
+    </div>
+
+    <div class="glass rounded-xl p-5 stat-card">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-sm text-slate-400">回测总数</span>
+            <svg class="w-5 h-5 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        </div>
+        <div class="text-3xl font-bold">{{ stats.total_backtests }}</div>
+        <div class="text-xs text-slate-500 mt-1">完成 {{ stats.completed_backtests }}</div>
+    </div>
+
+    <div class="glass rounded-xl p-5 stat-card">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-sm text-slate-400">活跃监控</span>
+            <svg class="w-5 h-5 text-profit" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </div>
+        <div class="text-3xl font-bold text-profit">{{ stats.running_monitors }}</div>
+        <div class="text-xs text-slate-500 mt-1">总计 {{ stats.total_monitors }} · 信号 {{ stats.total_signals }}</div>
+    </div>
+</div>
+
+<div class="grid md:grid-cols-2 gap-6">
+    <div class="glass rounded-xl p-5">
+        <h3 class="font-semibold mb-3">快捷入口</h3>
+        <div class="grid grid-cols-2 gap-3">
+            <a href="/admin/users" class="flex items-center gap-2 p-3 rounded-lg bg-surface-2/50 hover:bg-surface-3 transition-colors text-sm">
+                <svg class="w-4 h-4 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                用户管理
+            </a>
+            <a href="/admin/monitors" class="flex items-center gap-2 p-3 rounded-lg bg-surface-2/50 hover:bg-surface-3 transition-colors text-sm">
+                <svg class="w-4 h-4 text-profit" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                监控管理
+            </a>
+            <a href="/admin/strategies" class="flex items-center gap-2 p-3 rounded-lg bg-surface-2/50 hover:bg-surface-3 transition-colors text-sm">
+                <svg class="w-4 h-4 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+                策略管理
+            </a>
+            <a href="/admin/backtests" class="flex items-center gap-2 p-3 rounded-lg bg-surface-2/50 hover:bg-surface-3 transition-colors text-sm">
+                <svg class="w-4 h-4 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                回测管理
+            </a>
+        </div>
+    </div>
+
+    <div class="glass rounded-xl p-5">
+        <h3 class="font-semibold mb-3">系统信息</h3>
+        <div class="space-y-2 text-sm">
+            <div class="flex justify-between">
+                <span class="text-slate-400">API 前缀</span>
+                <code class="text-slate-300">{{ '/api/v1' }}</code>
+            </div>
+            <div class="flex justify-between">
+                <span class="text-slate-400">API 文档</span>
+                <a href="/docs" class="text-brand-400 hover:text-brand-500">/docs</a>
+            </div>
+            <div class="flex justify-between">
+                <span class="text-slate-400">健康检查</span>
+                <a href="/health" class="text-brand-400 hover:text-brand-500">/health</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

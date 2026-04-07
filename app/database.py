@@ -751,3 +751,184 @@ async def delete_vault_key(machine_code: str, key_name: str = "hyperliquid") -> 
         (machine_code, key_name),
     )
     return True
+
+
+# ═══════════════════════════════════════════
+#  Web 排行榜 & 后台统计
+# ═══════════════════════════════════════════
+
+
+async def leaderboard_strategies(
+    sort_by: str = "total_return_pct",
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """按回测绩效排序的策略排行榜，每个策略取最新一次已完成的回测。"""
+    allowed_sorts = {
+        "total_return_pct": "total_return_pct",
+        "sharpe_ratio": "sharpe_ratio",
+        "win_rate": "win_rate",
+        "max_drawdown_pct": "max_drawdown_pct",
+        "total_trades": "total_trades",
+    }
+    order_col = allowed_sorts.get(sort_by, "total_return_pct")
+
+    sql = f"""
+        SELECT
+            s.strategy_id, s.name, s.symbol, s.timeframe, s.direction, s.status AS strategy_status,
+            b.backtest_id, b.conclusion,
+            b.metrics_json,
+            b.created_at AS backtest_at
+        FROM dex_strategies s
+        INNER JOIN dex_backtest_results b ON b.backtest_id = (
+            SELECT b2.backtest_id FROM dex_backtest_results b2
+            WHERE b2.strategy_id = s.strategy_id AND b2.status = 'completed'
+            ORDER BY b2.created_at DESC LIMIT 1
+        )
+        WHERE b.status = 'completed'
+        ORDER BY
+            CAST(JSON_EXTRACT(b.metrics_json, '$.{order_col}') AS DOUBLE) DESC
+        LIMIT %s OFFSET %s
+    """
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, (limit, offset), True)
+    for row in rows:
+        if row.get("metrics_json"):
+            if isinstance(row["metrics_json"], str):
+                row["metrics"] = json.loads(row["metrics_json"])
+            else:
+                row["metrics"] = row["metrics_json"]
+        else:
+            row["metrics"] = {}
+    return rows
+
+
+async def get_strategy_detail_with_backtest(strategy_id: str) -> Optional[dict]:
+    """获取策略详情 + 最新回测结果。"""
+    strategy = await get_strategy(strategy_id)
+    if not strategy:
+        return None
+
+    backtests = await asyncio.to_thread(
+        mysql.execute_sql,
+        "SELECT backtest_id, strategy_name, conclusion, status, metrics_json, "
+        "trades_json, equity_json, created_at, elapsed_ms "
+        "FROM dex_backtest_results WHERE strategy_id = %s ORDER BY created_at DESC LIMIT 5",
+        (strategy_id,),
+        True,
+    )
+    for bt in backtests:
+        for field in ("metrics_json", "trades_json", "equity_json"):
+            if bt.get(field) and isinstance(bt[field], str):
+                try:
+                    bt[field] = json.loads(bt[field])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+    strategy["backtests"] = backtests
+    return strategy
+
+
+async def admin_dashboard_stats() -> dict:
+    """后台 Dashboard 统计数据。"""
+    queries = {
+        "total_users": "SELECT COUNT(*) AS cnt FROM dex_machine_tokens",
+        "active_users": "SELECT COUNT(*) AS cnt FROM dex_machine_tokens WHERE status = 'active'",
+        "total_strategies": "SELECT COUNT(*) AS cnt FROM dex_strategies",
+        "total_backtests": "SELECT COUNT(*) AS cnt FROM dex_backtest_results",
+        "completed_backtests": "SELECT COUNT(*) AS cnt FROM dex_backtest_results WHERE status = 'completed'",
+        "running_monitors": "SELECT COUNT(*) AS cnt FROM dex_monitor_jobs WHERE status = 'running'",
+        "total_monitors": "SELECT COUNT(*) AS cnt FROM dex_monitor_jobs",
+        "total_signals": "SELECT COUNT(*) AS cnt FROM dex_monitor_signals",
+    }
+    stats = {}
+
+    def _run():
+        for key, sql in queries.items():
+            rows = mysql.execute_sql(sql, None, True)
+            stats[key] = rows[0]["cnt"] if rows else 0
+
+    await asyncio.to_thread(_run)
+    return stats
+
+
+async def admin_list_users(limit: int = 100, offset: int = 0) -> list[dict]:
+    """管理后台用户列表，附带策略数和监控数。"""
+    sql = """
+        SELECT
+            t.id, t.machine_code, t.token, t.max_strategies, t.status, t.created_at,
+            (SELECT COUNT(*) FROM dex_strategies s WHERE s.machine_code = t.machine_code AND s.status != 'archived') AS strategy_count,
+            (SELECT COUNT(*) FROM dex_monitor_jobs m WHERE m.machine_code = t.machine_code AND m.status = 'running') AS running_monitors
+        FROM dex_machine_tokens t
+        ORDER BY t.created_at DESC
+        LIMIT %s OFFSET %s
+    """
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, (limit, offset), True)
+    return rows
+
+
+async def admin_list_all_monitors(limit: int = 100, offset: int = 0) -> list[dict]:
+    """管理后台全部监控任务。"""
+    sql = """
+        SELECT job_id, machine_code, strategy_name, symbol, timeframe,
+               interval_seconds, status, total_cycles, total_signals,
+               last_run_at, last_error, created_at, updated_at
+        FROM dex_monitor_jobs
+        ORDER BY
+            FIELD(status, 'running', 'error', 'stopped'),
+            updated_at DESC
+        LIMIT %s OFFSET %s
+    """
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, (limit, offset), True)
+    return rows
+
+
+async def admin_list_all_strategies(limit: int = 100, offset: int = 0) -> list[dict]:
+    """管理后台全部策略列表。"""
+    sql = """
+        SELECT s.strategy_id, s.machine_code, s.name, s.symbol, s.timeframe,
+               s.direction, s.version, s.status, s.created_at, s.updated_at,
+               (SELECT COUNT(*) FROM dex_backtest_results b WHERE b.strategy_id = s.strategy_id) AS backtest_count
+        FROM dex_strategies s
+        ORDER BY s.updated_at DESC
+        LIMIT %s OFFSET %s
+    """
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, (limit, offset), True)
+    return rows
+
+
+async def admin_list_all_backtests(limit: int = 100, offset: int = 0) -> list[dict]:
+    """管理后台全部回测列表。"""
+    sql = """
+        SELECT backtest_id, strategy_id, strategy_name, conclusion, status,
+               metrics_json, elapsed_ms, created_at
+        FROM dex_backtest_results
+        ORDER BY created_at DESC
+        LIMIT %s OFFSET %s
+    """
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, (limit, offset), True)
+    for row in rows:
+        if row.get("metrics_json"):
+            if isinstance(row["metrics_json"], str):
+                try:
+                    row["metrics"] = json.loads(row["metrics_json"])
+                except (json.JSONDecodeError, TypeError):
+                    row["metrics"] = {}
+            else:
+                row["metrics"] = row["metrics_json"]
+        else:
+            row["metrics"] = {}
+    return rows
+
+
+async def public_list_monitors(limit: int = 50) -> list[dict]:
+    """公开的监控任务列表（仅展示 running 状态）。"""
+    sql = """
+        SELECT job_id, strategy_name, symbol, timeframe, interval_seconds,
+               status, total_cycles, total_signals, last_run_at, created_at
+        FROM dex_monitor_jobs
+        WHERE status = 'running'
+        ORDER BY last_run_at DESC
+        LIMIT %s
+    """
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, (limit,), True)
+    return rows

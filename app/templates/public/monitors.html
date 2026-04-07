@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}实时监控 - DEX Quant{% endblock %}
+{% block nav_monitor %}font-semibold text-brand-400{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h2 class="text-2xl font-bold mb-1">实时监控</h2>
+    <p class="text-sm text-slate-400">当前正在运行的策略监控任务</p>
+</div>
+
+{% if monitors %}
+<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+    {% for m in monitors %}
+    <div class="glass rounded-xl p-5 stat-card">
+        <div class="flex items-start justify-between mb-3">
+            <div>
+                <h3 class="font-semibold text-brand-400">{{ m.strategy_name or '未命名策略' }}</h3>
+                <div class="flex gap-2 mt-1">
+                    <span class="tag tag-neutral">{{ m.symbol }}</span>
+                    <span class="tag tag-neutral">{{ m.timeframe }}</span>
+                </div>
+            </div>
+            <span class="tag tag-running">
+                <span class="inline-block w-2 h-2 rounded-full bg-profit mr-1 animate-pulse"></span>
+                运行中
+            </span>
+        </div>
+        <div class="grid grid-cols-3 gap-3 text-center text-sm">
+            <div>
+                <div class="text-xs text-slate-400">轮次</div>
+                <div class="font-mono font-semibold">{{ m.total_cycles or 0 }}</div>
+            </div>
+            <div>
+                <div class="text-xs text-slate-400">信号数</div>
+                <div class="font-mono font-semibold text-brand-400">{{ m.total_signals or 0 }}</div>
+            </div>
+            <div>
+                <div class="text-xs text-slate-400">间隔</div>
+                <div class="font-mono text-slate-300">{{ (m.interval_seconds or 0) // 60 }}m</div>
+            </div>
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-800/50 text-xs text-slate-500 flex justify-between">
+            <span>最后执行: {{ m.last_run_at[:16] if m.last_run_at else '尚未执行' }}</span>
+            <span>启动: {{ m.created_at[:10] if m.created_at else '-' }}</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="glass rounded-xl p-12 text-center">
+    <div class="text-4xl mb-3 opacity-30">
+        <svg class="w-16 h-16 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    </div>
+    <p class="text-slate-400">当前没有运行中的监控任务</p>
+    <p class="text-xs text-slate-600 mt-1">通过 API 启动监控任务后，状态会实时显示在这里</p>
+</div>
+{% endif %}
+{% endblock %}

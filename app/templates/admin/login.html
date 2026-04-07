@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理员登录 - DEX Quant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { colors: { brand: { 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5' } } } }
+        }
+    </script>
+    <style>
+        body { background: #0f1117; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .glass { background: rgba(22,27,34,0.8); backdrop-filter: blur(12px); border: 1px solid rgba(99,102,241,0.15); }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center">
+    <div class="glass rounded-2xl p-8 w-full max-w-sm">
+        <div class="text-center mb-6">
+            <div class="flex items-center justify-center gap-2 text-2xl font-bold text-brand-400 mb-2">
+                <svg class="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg>
+                DEX Quant
+            </div>
+            <p class="text-sm text-slate-400">管理后台登录</p>
+        </div>
+
+        {% if error %}
+        <div class="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 mb-4 text-sm text-red-400">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/admin/login">
+            <label class="block text-sm text-slate-400 mb-1">Admin API Key</label>
+            <input type="password" name="api_key" required autocomplete="current-password"
+                   class="w-full bg-surface-1 border border-slate-700 rounded-lg px-4 py-2.5 text-sm
+                          focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500
+                          transition-colors mb-4"
+                   style="background: #161b22;"
+                   placeholder="输入 ADMIN_API_KEY">
+            <button type="submit"
+                    class="w-full bg-brand-600 hover:bg-brand-500 text-white font-medium py-2.5 rounded-lg
+                           transition-colors text-sm">
+                登录
+            </button>
+        </form>
+
+        <div class="mt-4 text-center">
+            <a href="/" class="text-xs text-slate-500 hover:text-brand-400 transition-colors">&larr; 返回前台</a>
+        </div>
+    </div>
+</body>
+</html>

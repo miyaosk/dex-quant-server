@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}{{ strategy.name }} - DEX Quant{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <a href="/" class="text-sm text-slate-400 hover:text-brand-400 transition-colors">&larr; 返回排行榜</a>
+</div>
+
+<div class="glass rounded-xl p-6 mb-6">
+    <div class="flex items-start justify-between mb-4">
+        <div>
+            <h2 class="text-2xl font-bold">{{ strategy.name }}</h2>
+            <p class="text-sm text-slate-400 mt-1">{{ strategy.description or '无描述' }}</p>
+        </div>
+        <div class="flex gap-2">
+            <span class="tag tag-neutral">{{ strategy.symbol }}</span>
+            <span class="tag tag-neutral">{{ strategy.timeframe }}</span>
+            <span class="tag tag-neutral">{{ strategy.direction }}</span>
+        </div>
+    </div>
+    <div class="text-xs text-slate-500">
+        ID: <code class="text-slate-400">{{ strategy.strategy_id }}</code>
+        · 版本 {{ strategy.version or 'v1.0' }}
+        · {{ strategy.status or 'draft' }}
+    </div>
+</div>
+
+{% if strategy.backtests %}
+{% set latest = strategy.backtests[0] %}
+{% set m = latest.metrics_json if latest.metrics_json is mapping else {} %}
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">总收益率</div>
+        <div class="text-2xl font-bold font-mono {% if (m.total_return_pct or 0) >= 0 %}text-profit{% else %}text-loss{% endif %}">
+            {{ "%.2f"|format(m.total_return_pct or 0) }}%
+        </div>
+    </div>
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">Sharpe Ratio</div>
+        <div class="text-2xl font-bold font-mono {% if (m.sharpe_ratio or 0) >= 1 %}text-profit{% elif (m.sharpe_ratio or 0) < 0 %}text-loss{% else %}text-slate-200{% endif %}">
+            {{ "%.2f"|format(m.sharpe_ratio or 0) }}
+        </div>
+    </div>
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">胜率</div>
+        <div class="text-2xl font-bold font-mono text-slate-200">
+            {{ "%.1f"|format((m.win_rate or 0) * 100) }}%
+        </div>
+    </div>
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">最大回撤</div>
+        <div class="text-2xl font-bold font-mono text-loss">
+            {{ "%.2f"|format(m.max_drawdown_pct or 0) }}%
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">年化收益</div>
+        <div class="text-lg font-mono {% if (m.annual_return_pct or 0) >= 0 %}text-profit{% else %}text-loss{% endif %}">
+            {{ "%.2f"|format(m.annual_return_pct or 0) }}%
+        </div>
+    </div>
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">Sortino</div>
+        <div class="text-lg font-mono text-slate-200">{{ "%.2f"|format(m.sortino_ratio or 0) }}</div>
+    </div>
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">盈亏比</div>
+        <div class="text-lg font-mono text-slate-200">{{ "%.2f"|format(m.profit_loss_ratio or 0) }}</div>
+    </div>
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">总交易</div>
+        <div class="text-lg font-mono text-slate-200">{{ m.total_trades or 0 }}</div>
+    </div>
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">最终余额</div>
+        <div class="text-lg font-mono text-slate-200">${{ "{:,.0f}".format(m.final_balance or 0) }}</div>
+    </div>
+</div>
+
+{% if latest.equity_json %}
+<div class="glass rounded-xl p-6 mb-6">
+    <h3 class="text-lg font-semibold mb-4">权益曲线</h3>
+    <canvas id="equityChart" height="100"></canvas>
+</div>
+{% endif %}
+
+{% if latest.trades_json %}
+<div class="glass rounded-xl p-6 mb-6">
+    <h3 class="text-lg font-semibold mb-4">交易记录</h3>
+    <div class="overflow-x-auto max-h-96 overflow-y-auto">
+        <table class="w-full text-xs">
+            <thead>
+                <tr class="text-slate-400 uppercase bg-surface-2 sticky top-0">
+                    <th class="px-3 py-2 text-left">#</th>
+                    <th class="px-3 py-2 text-left">时间</th>
+                    <th class="px-3 py-2 text-center">操作</th>
+                    <th class="px-3 py-2 text-right">价格</th>
+                    <th class="px-3 py-2 text-right">数量</th>
+                    <th class="px-3 py-2 text-right">盈亏</th>
+                    <th class="px-3 py-2 text-right">盈亏%</th>
+                    <th class="px-3 py-2 text-right">余额</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in latest.trades_json[:100] %}
+                <tr class="border-t border-slate-800/30">
+                    <td class="px-3 py-2 text-slate-500">{{ t.trade_id or loop.index }}</td>
+                    <td class="px-3 py-2 font-mono">{{ t.datetime or '-' }}</td>
+                    <td class="px-3 py-2 text-center">
+                        {% if t.action == 'open' or t.action == 'buy' %}
+                        <span class="tag tag-profit">{{ t.side or t.action }}</span>
+                        {% else %}
+                        <span class="tag tag-loss">{{ t.side or t.action }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right font-mono">${{ "%.2f"|format(t.price or 0) }}</td>
+                    <td class="px-3 py-2 text-right font-mono">{{ "%.4f"|format(t.quantity or 0) }}</td>
+                    <td class="px-3 py-2 text-right font-mono {% if (t.pnl or 0) >= 0 %}text-profit{% else %}text-loss{% endif %}">
+                        ${{ "%.2f"|format(t.pnl or 0) }}
+                    </td>
+                    <td class="px-3 py-2 text-right font-mono {% if (t.pnl_pct or 0) >= 0 %}text-profit{% else %}text-loss{% endif %}">
+                        {{ "%.2f"|format(t.pnl_pct or 0) }}%
+                    </td>
+                    <td class="px-3 py-2 text-right font-mono">${{ "{:,.0f}".format(t.balance_after or 0) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% if strategy.backtests|length > 1 %}
+<div class="glass rounded-xl p-6">
+    <h3 class="text-lg font-semibold mb-4">历史回测</h3>
+    <div class="space-y-2">
+        {% for bt in strategy.backtests %}
+        {% set bm = bt.metrics_json if bt.metrics_json is mapping else {} %}
+        <div class="flex items-center justify-between p-3 rounded-lg bg-surface-2/50 text-sm">
+            <div>
+                <code class="text-xs text-slate-400">{{ bt.backtest_id[:16] }}...</code>
+                <span class="ml-2">{{ bt.created_at[:19] if bt.created_at else '-' }}</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <span class="font-mono {% if (bm.total_return_pct or 0) >= 0 %}text-profit{% else %}text-loss{% endif %}">
+                    {{ "%.2f"|format(bm.total_return_pct or 0) }}%
+                </span>
+                <span class="font-mono text-slate-400">Sharpe {{ "%.2f"|format(bm.sharpe_ratio or 0) }}</span>
+                {% if bt.conclusion == 'approved' %}
+                <span class="tag tag-profit">通过</span>
+                {% elif bt.conclusion == 'rejected' %}
+                <span class="tag tag-loss">拒绝</span>
+                {% else %}
+                <span class="tag tag-neutral">{{ bt.conclusion or bt.status }}</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="glass rounded-xl p-12 text-center">
+    <p class="text-slate-400">该策略尚无回测记录</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if strategy.backtests and strategy.backtests[0].equity_json %}
+<script>
+(function() {
+    const equity = {{ strategy.backtests[0].equity_json | tojson }};
+    if (!equity || !equity.length) return;
+
+    const labels = equity.map(e => e.datetime || e.date || '');
+    const values = equity.map(e => e.balance || e.equity || e.value || 0);
+
+    new Chart(document.getElementById('equityChart'), {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: '权益',
+                data: values,
+                borderColor: '#6366f1',
+                backgroundColor: 'rgba(99,102,241,0.1)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 0,
+                borderWidth: 2,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: {
+                    display: true,
+                    ticks: { color: '#64748b', maxTicksLimit: 10, font: { size: 10 } },
+                    grid: { color: 'rgba(51,65,85,0.3)' },
+                },
+                y: {
+                    display: true,
+                    ticks: { color: '#64748b', font: { size: 10 } },
+                    grid: { color: 'rgba(51,65,85,0.3)' },
+                }
+            },
+            interaction: { intersect: false, mode: 'index' },
+        }
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}

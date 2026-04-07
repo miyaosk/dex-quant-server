@@ -1,0 +1,58 @@
+{% extends "admin/base.html" %}
+{% block title %}监控管理{% endblock %}
+{% block page_title %}监控管理{% endblock %}
+{% block sidebar_monitors %}active{% endblock %}
+
+{% block content %}
+<div class="glass rounded-xl overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-xs text-slate-400 uppercase bg-surface-2">
+                    <th class="px-4 py-3 text-left">任务ID</th>
+                    <th class="px-4 py-3 text-left">策略名</th>
+                    <th class="px-4 py-3 text-left">交易对</th>
+                    <th class="px-4 py-3 text-center">周期</th>
+                    <th class="px-4 py-3 text-center">状态</th>
+                    <th class="px-4 py-3 text-right">轮次</th>
+                    <th class="px-4 py-3 text-right">信号数</th>
+                    <th class="px-4 py-3 text-left">用户</th>
+                    <th class="px-4 py-3 text-right">最后运行</th>
+                    <th class="px-4 py-3 text-right">创建时间</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in monitors %}
+                <tr class="border-t border-slate-800/50">
+                    <td class="px-4 py-3 font-mono text-xs">{{ m.job_id[:16] }}...</td>
+                    <td class="px-4 py-3 font-medium">{{ m.strategy_name or '未命名' }}</td>
+                    <td class="px-4 py-3 font-mono text-xs">{{ m.symbol }}</td>
+                    <td class="px-4 py-3 text-center text-xs">{{ m.timeframe }}</td>
+                    <td class="px-4 py-3 text-center">
+                        {% if m.status == 'running' %}
+                        <span class="tag tag-running">
+                            <span class="inline-block w-1.5 h-1.5 rounded-full bg-profit mr-1 animate-pulse"></span>
+                            运行中
+                        </span>
+                        {% elif m.status == 'error' %}
+                        <span class="tag tag-loss">错误</span>
+                        {% else %}
+                        <span class="tag tag-stopped">已停止</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono">{{ m.total_cycles }}</td>
+                    <td class="px-4 py-3 text-right font-mono text-brand-400">{{ m.total_signals }}</td>
+                    <td class="px-4 py-3 font-mono text-xs text-slate-400">{{ m.machine_code[:12] }}...</td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ m.last_run_at[:16] if m.last_run_at else '-' }}</td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ m.created_at[:10] if m.created_at else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if not monitors %}
+<div class="text-center py-12 text-slate-400">暂无监控任务</div>
+{% endif %}
+{% endblock %}

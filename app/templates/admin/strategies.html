@@ -1,0 +1,57 @@
+{% extends "admin/base.html" %}
+{% block title %}策略管理{% endblock %}
+{% block page_title %}策略管理{% endblock %}
+{% block sidebar_strategies %}active{% endblock %}
+
+{% block content %}
+<div class="glass rounded-xl overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-xs text-slate-400 uppercase bg-surface-2">
+                    <th class="px-4 py-3 text-left">策略名</th>
+                    <th class="px-4 py-3 text-left">交易对</th>
+                    <th class="px-4 py-3 text-center">周期</th>
+                    <th class="px-4 py-3 text-center">方向</th>
+                    <th class="px-4 py-3 text-center">版本</th>
+                    <th class="px-4 py-3 text-center">状态</th>
+                    <th class="px-4 py-3 text-right">回测数</th>
+                    <th class="px-4 py-3 text-left">用户</th>
+                    <th class="px-4 py-3 text-right">更新时间</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in strategies %}
+                <tr class="border-t border-slate-800/50">
+                    <td class="px-4 py-3">
+                        <a href="/strategy/{{ s.strategy_id }}" class="text-brand-400 hover:text-brand-500 font-medium transition-colors">
+                            {{ s.name }}
+                        </a>
+                    </td>
+                    <td class="px-4 py-3 font-mono text-xs">{{ s.symbol }}</td>
+                    <td class="px-4 py-3 text-center text-xs">{{ s.timeframe }}</td>
+                    <td class="px-4 py-3 text-center text-xs">{{ s.direction }}</td>
+                    <td class="px-4 py-3 text-center text-xs">{{ s.version }}</td>
+                    <td class="px-4 py-3 text-center">
+                        {% if s.status == 'active' %}
+                        <span class="tag tag-profit">活跃</span>
+                        {% elif s.status == 'archived' %}
+                        <span class="tag tag-loss">归档</span>
+                        {% else %}
+                        <span class="tag tag-neutral">{{ s.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono">{{ s.backtest_count }}</td>
+                    <td class="px-4 py-3 font-mono text-xs text-slate-400">{{ s.machine_code[:12] if s.machine_code else '-' }}...</td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ s.updated_at[:16] if s.updated_at else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if not strategies %}
+<div class="text-center py-12 text-slate-400">暂无策略</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}DEX Quant{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5' },
+                        profit: '#22c55e',
+                        loss: '#ef4444',
+                        surface: { 0: '#0f1117', 1: '#161b22', 2: '#1c2333', 3: '#242c3d' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background: #0f1117; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .glass { background: rgba(22,27,34,0.8); backdrop-filter: blur(12px); border: 1px solid rgba(99,102,241,0.15); }
+        .stat-card { transition: transform 0.2s, box-shadow 0.2s; }
+        .stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(99,102,241,0.15); }
+        .rank-1 { color: #fbbf24; }
+        .rank-2 { color: #94a3b8; }
+        .rank-3 { color: #d97706; }
+        .tag { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; }
+        .tag-profit { background: rgba(34,197,94,0.15); color: #22c55e; }
+        .tag-loss { background: rgba(239,68,68,0.15); color: #ef4444; }
+        .tag-neutral { background: rgba(148,163,184,0.15); color: #94a3b8; }
+        .tag-running { background: rgba(34,197,94,0.15); color: #22c55e; }
+        .tag-stopped { background: rgba(239,68,68,0.15); color: #ef4444; }
+        .sortable { cursor: pointer; user-select: none; }
+        .sortable:hover { color: #818cf8; }
+        table { border-collapse: separate; border-spacing: 0; }
+        thead th { position: sticky; top: 0; z-index: 10; }
+        tr:hover td { background: rgba(99,102,241,0.06); }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body class="min-h-screen">
+    {% block body %}
+    <nav class="glass sticky top-0 z-50 px-6 py-3 flex items-center justify-between">
+        <a href="/" class="flex items-center gap-2 text-xl font-bold text-brand-400 hover:text-brand-500 transition-colors">
+            <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg>
+            DEX Quant
+        </a>
+        <div class="flex items-center gap-6">
+            <a href="/" class="text-sm text-slate-300 hover:text-brand-400 transition-colors {% block nav_rank %}{% endblock %}">排行榜</a>
+            <a href="/monitors" class="text-sm text-slate-300 hover:text-brand-400 transition-colors {% block nav_monitor %}{% endblock %}">实时监控</a>
+            <a href="/admin/" class="text-sm text-slate-400 hover:text-brand-400 transition-colors">管理后台</a>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-4 py-6">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="text-center text-xs text-slate-600 py-6">
+        DEX Quant Server v2.1 &mdash; 信号驱动量化回测平台
+    </footer>
+    {% endblock %}
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

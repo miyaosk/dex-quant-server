@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}404 - DEX Quant{% endblock %}
+
+{% block content %}
+<div class="glass rounded-xl p-16 text-center max-w-lg mx-auto mt-12">
+    <div class="text-6xl font-bold text-brand-400 mb-3">404</div>
+    <p class="text-slate-300 mb-1">{{ message or '页面不存在' }}</p>
+    <a href="/" class="text-sm text-brand-400 hover:text-brand-500 transition-colors">&larr; 返回排行榜</a>
+</div>
+{% endblock %}

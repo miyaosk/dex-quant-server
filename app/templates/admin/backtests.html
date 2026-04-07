@@ -1,0 +1,72 @@
+{% extends "admin/base.html" %}
+{% block title %}回测管理{% endblock %}
+{% block page_title %}回测管理{% endblock %}
+{% block sidebar_backtests %}active{% endblock %}
+
+{% block content %}
+<div class="glass rounded-xl overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-xs text-slate-400 uppercase bg-surface-2">
+                    <th class="px-4 py-3 text-left">回测ID</th>
+                    <th class="px-4 py-3 text-left">策略名</th>
+                    <th class="px-4 py-3 text-center">状态</th>
+                    <th class="px-4 py-3 text-center">结论</th>
+                    <th class="px-4 py-3 text-right">收益率</th>
+                    <th class="px-4 py-3 text-right">Sharpe</th>
+                    <th class="px-4 py-3 text-right">胜率</th>
+                    <th class="px-4 py-3 text-right">交易数</th>
+                    <th class="px-4 py-3 text-right">耗时</th>
+                    <th class="px-4 py-3 text-right">时间</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for b in backtests %}
+                {% set m = b.metrics or {} %}
+                <tr class="border-t border-slate-800/50">
+                    <td class="px-4 py-3 font-mono text-xs">
+                        <a href="/strategy/{{ b.strategy_id }}" class="text-brand-400 hover:text-brand-500">
+                            {{ b.backtest_id[:16] }}...
+                        </a>
+                    </td>
+                    <td class="px-4 py-3">{{ b.strategy_name or '-' }}</td>
+                    <td class="px-4 py-3 text-center">
+                        {% if b.status == 'completed' %}
+                        <span class="tag tag-profit">完成</span>
+                        {% elif b.status == 'running' %}
+                        <span class="tag tag-running">运行中</span>
+                        {% else %}
+                        <span class="tag tag-loss">{{ b.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        {% if b.conclusion == 'approved' %}
+                        <span class="tag tag-profit">通过</span>
+                        {% elif b.conclusion == 'rejected' %}
+                        <span class="tag tag-loss">拒绝</span>
+                        {% elif b.conclusion == 'paper_trade_first' %}
+                        <span class="tag tag-neutral">模拟</span>
+                        {% else %}
+                        <span class="text-xs text-slate-500">{{ b.conclusion or '-' }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono {% if (m.total_return_pct or 0) >= 0 %}text-profit{% else %}text-loss{% endif %}">
+                        {{ "%.2f"|format(m.total_return_pct or 0) }}%
+                    </td>
+                    <td class="px-4 py-3 text-right font-mono">{{ "%.2f"|format(m.sharpe_ratio or 0) }}</td>
+                    <td class="px-4 py-3 text-right font-mono">{{ "%.1f"|format((m.win_rate or 0) * 100) }}%</td>
+                    <td class="px-4 py-3 text-right font-mono">{{ m.total_trades or 0 }}</td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ "%.1f"|format((b.elapsed_ms or 0) / 1000) }}s</td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ b.created_at[:16] if b.created_at else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if not backtests %}
+<div class="text-center py-12 text-slate-400">暂无回测记录</div>
+{% endif %}
+{% endblock %}
