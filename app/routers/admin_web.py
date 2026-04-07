@@ -29,22 +29,22 @@ def _check_admin(request: Request) -> bool:
 async def login_page(request: Request):
     if _check_admin(request):
         return RedirectResponse("/admin/", status_code=302)
-    return templates.TemplateResponse("admin/login.html", {"request": request})
+    return templates.TemplateResponse(request, "admin/login.html")
 
 
 @router.post("/login", response_class=HTMLResponse)
 async def login_submit(request: Request, api_key: str = Form(...)):
     if not config.ADMIN_API_KEY:
-        return templates.TemplateResponse("admin/login.html", {
-            "request": request,
-            "error": "服务器未配置 ADMIN_API_KEY",
-        })
+        return templates.TemplateResponse(
+            request, "admin/login.html",
+            {"error": "服务器未配置 ADMIN_API_KEY"},
+        )
 
     if not hmac.compare_digest(api_key, config.ADMIN_API_KEY):
-        return templates.TemplateResponse("admin/login.html", {
-            "request": request,
-            "error": "API Key 错误",
-        })
+        return templates.TemplateResponse(
+            request, "admin/login.html",
+            {"error": "API Key 错误"},
+        )
 
     session_token = secrets.token_urlsafe(32)
     _SESSION_TOKENS[session_token] = True
@@ -78,10 +78,7 @@ async def dashboard(request: Request):
     if redirect:
         return redirect
     stats = await database.admin_dashboard_stats()
-    return templates.TemplateResponse("admin/dashboard.html", {
-        "request": request,
-        "stats": stats,
-    })
+    return templates.TemplateResponse(request, "admin/dashboard.html", {"stats": stats})
 
 
 @router.get("/users", response_class=HTMLResponse)
@@ -90,10 +87,7 @@ async def users_page(request: Request):
     if redirect:
         return redirect
     users = await database.admin_list_users()
-    return templates.TemplateResponse("admin/users.html", {
-        "request": request,
-        "users": users,
-    })
+    return templates.TemplateResponse(request, "admin/users.html", {"users": users})
 
 
 @router.get("/monitors", response_class=HTMLResponse)
@@ -102,10 +96,7 @@ async def monitors_page(request: Request):
     if redirect:
         return redirect
     monitors = await database.admin_list_all_monitors()
-    return templates.TemplateResponse("admin/monitors.html", {
-        "request": request,
-        "monitors": monitors,
-    })
+    return templates.TemplateResponse(request, "admin/monitors.html", {"monitors": monitors})
 
 
 @router.get("/strategies", response_class=HTMLResponse)
@@ -114,10 +105,7 @@ async def strategies_page(request: Request):
     if redirect:
         return redirect
     strategies = await database.admin_list_all_strategies()
-    return templates.TemplateResponse("admin/strategies.html", {
-        "request": request,
-        "strategies": strategies,
-    })
+    return templates.TemplateResponse(request, "admin/strategies.html", {"strategies": strategies})
 
 
 @router.get("/backtests", response_class=HTMLResponse)
@@ -126,7 +114,4 @@ async def backtests_page(request: Request):
     if redirect:
         return redirect
     backtests = await database.admin_list_all_backtests()
-    return templates.TemplateResponse("admin/backtests.html", {
-        "request": request,
-        "backtests": backtests,
-    })
+    return templates.TemplateResponse(request, "admin/backtests.html", {"backtests": backtests})
