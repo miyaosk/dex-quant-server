@@ -780,12 +780,12 @@ async def leaderboard_strategies(
             b.metrics_json,
             b.created_at AS backtest_at
         FROM dex_strategies s
-        INNER JOIN dex_backtest_results b ON b.backtest_id = (
-            SELECT b2.backtest_id FROM dex_backtest_results b2
-            WHERE b2.strategy_id = s.strategy_id AND b2.status = 'completed'
-            ORDER BY b2.created_at DESC LIMIT 1
-        )
-        WHERE b.status = 'completed'
+        INNER JOIN dex_backtest_results b ON b.strategy_id = s.strategy_id AND b.status = 'completed'
+        LEFT JOIN dex_backtest_results b_newer
+            ON b_newer.strategy_id = s.strategy_id
+            AND b_newer.status = 'completed'
+            AND b_newer.created_at > b.created_at
+        WHERE b_newer.backtest_id IS NULL
         ORDER BY
             CAST(JSON_EXTRACT(b.metrics_json, '$.{order_col}') AS DECIMAL(20,6)) DESC
         LIMIT %s OFFSET %s
@@ -829,26 +829,20 @@ async def get_strategy_detail_with_backtest(strategy_id: str) -> Optional[dict]:
 
 
 async def admin_dashboard_stats() -> dict:
-    """后台 Dashboard 统计数据。"""
-    queries = {
-        "total_users": "SELECT COUNT(*) AS cnt FROM dex_machine_tokens",
-        "active_users": "SELECT COUNT(*) AS cnt FROM dex_machine_tokens WHERE status = 'active'",
-        "total_strategies": "SELECT COUNT(*) AS cnt FROM dex_strategies",
-        "total_backtests": "SELECT COUNT(*) AS cnt FROM dex_backtest_results",
-        "completed_backtests": "SELECT COUNT(*) AS cnt FROM dex_backtest_results WHERE status = 'completed'",
-        "running_monitors": "SELECT COUNT(*) AS cnt FROM dex_monitor_jobs WHERE status = 'running'",
-        "total_monitors": "SELECT COUNT(*) AS cnt FROM dex_monitor_jobs",
-        "total_signals": "SELECT COUNT(*) AS cnt FROM dex_monitor_signals",
-    }
-    stats = {}
-
-    def _run():
-        for key, sql in queries.items():
-            rows = mysql.execute_sql(sql, None, True)
-            stats[key] = rows[0]["cnt"] if rows else 0
-
-    await asyncio.to_thread(_run)
-    return stats
+    """后台 Dashboard 统计数据（单条 SQL 一次查完）。"""
+    sql = """
+        SELECT
+            (SELECT COUNT(*) FROM dex_machine_tokens) AS total_users,
+            (SELECT COUNT(*) FROM dex_machine_tokens WHERE status = 'active') AS active_users,
+            (SELECT COUNT(*) FROM dex_strategies) AS total_strategies,
+            (SELECT COUNT(*) FROM dex_backtest_results) AS total_backtests,
+            (SELECT COUNT(*) FROM dex_backtest_results WHERE status = 'completed') AS completed_backtests,
+            (SELECT COUNT(*) FROM dex_monitor_jobs WHERE status = 'running') AS running_monitors,
+            (SELECT COUNT(*) FROM dex_monitor_jobs) AS total_monitors,
+            (SELECT COUNT(*) FROM dex_monitor_signals) AS total_signals
+    """
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, None, True)
+    return rows[0] if rows else {}
 
 
 async def admin_list_users(limit: int = 100, offset: int = 0) -> list[dict]:
