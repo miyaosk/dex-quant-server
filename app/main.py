@@ -7,9 +7,10 @@ DEX Quant Server — FastAPI 应用入口
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import JSONResponse
 from loguru import logger
 
 from app import database
@@ -44,8 +45,15 @@ app = FastAPI(
 )
 
 
+def _is_admin(request: Request) -> bool:
+    token = request.cookies.get("admin_session")
+    return bool(token and admin_web._SESSION_TOKENS.get(token))
+
+
 @app.get("/docs", include_in_schema=False)
-async def custom_swagger_ui():
+async def custom_swagger_ui(request: Request):
+    if not _is_admin(request):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
     return get_swagger_ui_html(
         openapi_url=app.openapi_url,
         title=app.title + " - Swagger UI",
@@ -55,12 +63,21 @@ async def custom_swagger_ui():
 
 
 @app.get("/redoc", include_in_schema=False)
-async def custom_redoc():
+async def custom_redoc(request: Request):
+    if not _is_admin(request):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
     return get_redoc_html(
         openapi_url=app.openapi_url,
         title=app.title + " - ReDoc",
         redoc_js_url="https://unpkg.com/redoc@2.1.5/bundles/redoc.standalone.js",
     )
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def custom_openapi(request: Request):
+    if not _is_admin(request):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return app.openapi()
 
 app.add_middleware(
     CORSMiddleware,

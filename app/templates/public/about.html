@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}关于平台 - DEX Quant{% endblock %}
+{% block nav_about %}font-semibold text-brand-400{% endblock %}
 
 {% block content %}
 <div class="max-w-4xl mx-auto">
@@ -29,15 +30,15 @@
     </div>
 
     <div class="glass rounded-xl p-8 mb-8">
-        <h2 class="text-xl font-bold mb-6 text-brand-400">工作流程</h2>
+        <h2 class="text-xl font-bold mb-6 text-brand-400">只需三步</h2>
         <div class="grid md:grid-cols-3 gap-6">
             <div class="text-center">
                 <div class="w-14 h-14 rounded-2xl bg-brand-600/20 flex items-center justify-center mx-auto mb-3">
                     <svg class="w-7 h-7 text-brand-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                 </div>
-                <h3 class="font-semibold mb-2">1. 描述想法</h3>
+                <h3 class="font-semibold mb-2">1. 说出你的想法</h3>
                 <p class="text-sm text-slate-400">"MACD 金叉就买 BTC，死叉就卖"</p>
-                <p class="text-xs text-slate-600 mt-1">AI 理解你的意图，自动生成可运行的策略脚本</p>
+                <p class="text-xs text-slate-600 mt-1">AI 理解你的意图，自动生成可运行的策略</p>
             </div>
             <div class="text-center">
                 <div class="w-14 h-14 rounded-2xl bg-brand-600/20 flex items-center justify-center mx-auto mb-3">
@@ -45,29 +46,29 @@
                 </div>
                 <h3 class="font-semibold mb-2">2. 回测验证</h3>
                 <p class="text-sm text-slate-400">用历史数据验证策略能不能赚钱</p>
-                <p class="text-xs text-slate-600 mt-1">Sharpe、最大回撤、胜率等全方位评估</p>
+                <p class="text-xs text-slate-600 mt-1">收益率、夏普比率、最大回撤等全方位评估</p>
             </div>
             <div class="text-center">
                 <div class="w-14 h-14 rounded-2xl bg-profit/20 flex items-center justify-center mx-auto mb-3">
                     <svg class="w-7 h-7 text-profit" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
                 </div>
-                <h3 class="font-semibold mb-2">3. 实时监控</h3>
-                <p class="text-sm text-slate-400">7x24 运行，信号来了自动通知或下单</p>
-                <p class="text-xs text-slate-600 mt-1">11 项风控检查，Kill Switch 一键停止</p>
+                <h3 class="font-semibold mb-2">3. 实盘执行</h3>
+                <p class="text-sm text-slate-400">7x24 监控，信号触发自动下单</p>
+                <p class="text-xs text-slate-600 mt-1">多重风控保护，一键紧急停止</p>
             </div>
         </div>
     </div>
 
     <div class="glass rounded-xl p-8 mb-8">
-        <h2 class="text-xl font-bold mb-6 text-brand-400">支持的信号源</h2>
+        <h2 class="text-xl font-bold mb-6 text-brand-400">策略能力</h2>
         <div class="grid md:grid-cols-2 gap-4">
             <div class="flex items-start gap-3 p-4 rounded-lg bg-surface-2/50">
                 <div class="w-10 h-10 rounded-lg bg-blue-500/15 flex items-center justify-center flex-shrink-0 mt-0.5">
                     <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/></svg>
                 </div>
                 <div>
-                    <h4 class="font-medium text-sm">技术指标</h4>
-                    <p class="text-xs text-slate-500 mt-0.5">MACD、RSI、布林带、KDJ、均线交叉、ATR、OBV、VWAP 等 12+ 种指标</p>
+                    <h4 class="font-medium text-sm">技术指标策略</h4>
+                    <p class="text-xs text-slate-500 mt-0.5">MACD、RSI、布林带、KDJ、均线交叉、ATR 等经典指标，自由组合</p>
                 </div>
             </div>
             <div class="flex items-start gap-3 p-4 rounded-lg bg-surface-2/50">
@@ -75,8 +76,8 @@
                     <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                 </div>
                 <div>
-                    <h4 class="font-medium text-sm">社交媒体</h4>
-                    <p class="text-xs text-slate-500 mt-0.5">Twitter/X KOL 喊单、新闻情绪分析、Reddit 热度监控</p>
+                    <h4 class="font-medium text-sm">社交媒体信号</h4>
+                    <p class="text-xs text-slate-500 mt-0.5">KOL 喊单监控、新闻情绪分析、社区热度追踪</p>
                 </div>
             </div>
             <div class="flex items-start gap-3 p-4 rounded-lg bg-surface-2/50">
@@ -84,8 +85,8 @@
                     <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a4 4 0 0 0-8 0v2"/></svg>
                 </div>
                 <div>
-                    <h4 class="font-medium text-sm">链上数据</h4>
-                    <p class="text-xs text-slate-500 mt-0.5">资金费率、鲸鱼转账、DEX 交易量、DeFi TVL、Gas 异常</p>
+                    <h4 class="font-medium text-sm">链上数据分析</h4>
+                    <p class="text-xs text-slate-500 mt-0.5">资金费率、鲸鱼动向、DEX 流动性变化、DeFi TVL</p>
                 </div>
             </div>
             <div class="flex items-start gap-3 p-4 rounded-lg bg-surface-2/50">
@@ -93,77 +94,57 @@
                     <svg class="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
                 </div>
                 <div>
-                    <h4 class="font-medium text-sm">大盘联动</h4>
-                    <p class="text-xs text-slate-500 mt-0.5">BTC 走势联动、纳指相关性、黄金避险情绪、跨市场信号</p>
+                    <h4 class="font-medium text-sm">混合策略</h4>
+                    <p class="text-xs text-slate-500 mt-0.5">技术指标 + 社媒 + 链上数据多维度信号组合</p>
                 </div>
             </div>
         </div>
     </div>
 
     <div class="glass rounded-xl p-8 mb-8">
-        <h2 class="text-xl font-bold mb-6 text-brand-400">回测引擎</h2>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center text-sm">
-            <div class="p-3 rounded-lg bg-surface-2/50">
-                <div class="font-mono text-lg text-slate-200">1x-125x</div>
-                <div class="text-xs text-slate-500">杠杆支持</div>
+        <h2 class="text-xl font-bold mb-6 text-brand-400">平台特点</h2>
+        <div class="grid md:grid-cols-2 gap-y-4 gap-x-8 text-sm">
+            <div class="flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full bg-profit flex-shrink-0"></span>
+                <span>自然语言 → 可运行策略，零编程基础也能用</span>
             </div>
-            <div class="p-3 rounded-lg bg-surface-2/50">
-                <div class="font-mono text-lg text-slate-200">15m~1d</div>
-                <div class="text-xs text-slate-500">K 线周期</div>
+            <div class="flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full bg-profit flex-shrink-0"></span>
+                <span>真实模拟杠杆、手续费、滑点、资金费率</span>
             </div>
-            <div class="p-3 rounded-lg bg-surface-2/50">
-                <div class="font-mono text-lg text-slate-200">6 种</div>
-                <div class="text-xs text-slate-500">参数优化方法</div>
+            <div class="flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full bg-profit flex-shrink-0"></span>
+                <span>多种参数优化方法（网格、遗传、贝叶斯等）</span>
             </div>
-            <div class="p-3 rounded-lg bg-surface-2/50">
-                <div class="font-mono text-lg text-slate-200">Binance</div>
-                <div class="text-xs text-slate-500">数据源</div>
+            <div class="flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full bg-profit flex-shrink-0"></span>
+                <span>11 项风控检查 + Kill Switch 紧急停止</span>
             </div>
-        </div>
-        <div class="mt-4 grid grid-cols-2 md:grid-cols-3 gap-2 text-xs text-slate-500">
-            <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-profit"></span> 多空双向</span>
-            <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-profit"></span> 逐仓保证金</span>
-            <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-profit"></span> 资金费率模拟</span>
-            <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-profit"></span> 止损止盈</span>
-            <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-profit"></span> 滑点与手续费</span>
-            <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-profit"></span> 强制平仓模拟</span>
-        </div>
-    </div>
-
-    <div class="glass rounded-xl p-8 mb-8">
-        <h2 class="text-xl font-bold mb-6 text-brand-400">系统架构</h2>
-        <div class="font-mono text-xs text-slate-400 bg-surface-2 rounded-lg p-5 overflow-x-auto">
-<pre class="whitespace-pre">
-  用户 (自然语言)
-    │
-    ▼
-  AI Skill 层 (Cursor / Codex)
-  ┌──────────────┐   ┌───────────┐   ┌─────────────────┐
-  │ strategy-    │──▶│ back-     │──▶│ monitor-        │
-  │ maker        │   │ tester    │   │ executor        │
-  │ 生成策略脚本 │   │ 回测验证  │   │ 实时监控+下单   │
-  └──────────────┘   └─────┬─────┘   └────────┬────────┘
-                           │ API              │ API
-                           ▼                  ▼
-                   ┌──────────────────────────────────┐
-                   │  DEX Quant Server (FastAPI)      │
-                   │  回测引擎 · K线缓存 · 信号存储   │
-                   │  策略排行榜 · 后台管理           │
-                   └──────────────┬───────────────────┘
-                                  ▼
-                              MySQL DB
-</pre>
+            <div class="flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full bg-profit flex-shrink-0"></span>
+                <span>策略排行榜公开透明，社区共享</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full bg-profit flex-shrink-0"></span>
+                <span>私钥加密存储（AES-256-GCM），安全下单</span>
+            </div>
         </div>
     </div>
 
     <div class="glass rounded-xl p-8 mb-8">
-        <h2 class="text-xl font-bold mb-4 text-brand-400">API 接口</h2>
-        <p class="text-sm text-slate-400 mb-4">完整的 RESTful API，支持策略管理、回测、监控、数据查询。</p>
-        <div class="flex gap-3">
-            <a href="/docs" class="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-sm rounded-lg transition-colors">Swagger 文档</a>
-            <a href="/redoc" class="px-4 py-2 bg-surface-3 hover:bg-surface-2 text-slate-300 text-sm rounded-lg transition-colors">ReDoc 文档</a>
-            <a href="/health" class="px-4 py-2 bg-surface-3 hover:bg-surface-2 text-slate-300 text-sm rounded-lg transition-colors">健康检查</a>
+        <h2 class="text-xl font-bold mb-4 text-brand-400">支持的交易对</h2>
+        <div class="flex flex-wrap gap-2">
+            {% for coin in ["BTC", "ETH", "SOL", "BNB", "DOGE", "AVAX", "ADA", "DOT", "MATIC", "LINK", "UNI", "AAVE"] %}
+            <span class="px-3 py-1.5 rounded-lg bg-surface-2/70 text-sm font-mono text-slate-300">{{ coin }}USDT</span>
+            {% endfor %}
+            <span class="px-3 py-1.5 rounded-lg bg-surface-3 text-sm text-slate-500">更多...</span>
         </div>
+        <p class="text-xs text-slate-600 mt-3">支持 Binance 永续合约和现货全部交易对</p>
+    </div>
+
+    <div class="text-center py-8">
+        <p class="text-sm text-slate-500 mb-4">想要体验？请联系管理员获取使用权限</p>
+        <a href="/" class="px-6 py-2.5 bg-brand-600 hover:bg-brand-500 text-white text-sm rounded-lg transition-colors">查看策略排行榜</a>
     </div>
 
 </div>
