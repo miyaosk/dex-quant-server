@@ -787,7 +787,7 @@ async def leaderboard_strategies(
         )
         WHERE b.status = 'completed'
         ORDER BY
-            CAST(JSON_EXTRACT(b.metrics_json, '$.{order_col}') AS DOUBLE) DESC
+            CAST(JSON_EXTRACT(b.metrics_json, '$.{order_col}') AS DECIMAL(20,6)) DESC
         LIMIT %s OFFSET %s
     """
     rows = await asyncio.to_thread(mysql.execute_sql, sql, (limit, offset), True)
