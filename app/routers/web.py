@@ -1,5 +1,5 @@
 """
-前台 Web 页面 — 排行榜、策略详情、实时监控
+前台 Web 页面 — 排行榜、策略详情、实时监控、平台介绍
 """
 
 from __future__ import annotations
@@ -17,9 +17,10 @@ templates = Jinja2Templates(directory="app/templates")
 @router.get("/", response_class=HTMLResponse)
 async def leaderboard(request: Request, sort: str = "total_return_pct"):
     strategies = await database.leaderboard_strategies(sort_by=sort, limit=50)
+    stats = await database.public_stats()
     return templates.TemplateResponse(
         request, "public/leaderboard.html",
-        {"strategies": strategies, "current_sort": sort},
+        {"strategies": strategies, "current_sort": sort, "stats": stats},
     )
 
 
@@ -41,7 +42,17 @@ async def strategy_detail(request: Request, strategy_id: str):
 @router.get("/monitors", response_class=HTMLResponse)
 async def monitors_page(request: Request):
     monitors = await database.public_list_monitors(limit=50)
+    monitor_stats = await database.public_monitor_stats()
     return templates.TemplateResponse(
         request, "public/monitors.html",
-        {"monitors": monitors},
+        {"monitors": monitors, "stats": monitor_stats},
+    )
+
+
+@router.get("/about", response_class=HTMLResponse)
+async def about_page(request: Request):
+    stats = await database.public_stats()
+    return templates.TemplateResponse(
+        request, "public/about.html",
+        {"stats": stats},
     )

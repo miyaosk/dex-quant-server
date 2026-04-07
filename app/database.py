@@ -926,3 +926,32 @@ async def public_list_monitors(limit: int = 50) -> list[dict]:
     """
     rows = await asyncio.to_thread(mysql.execute_sql, sql, (limit,), True)
     return rows
+
+
+async def public_stats() -> dict:
+    """前台公开统计数据（单条 SQL）。"""
+    sql = """
+        SELECT
+            (SELECT COUNT(*) FROM dex_strategies) AS total_strategies,
+            (SELECT COUNT(*) FROM dex_backtest_results WHERE status = 'completed') AS total_backtests,
+            (SELECT COUNT(*) FROM dex_monitor_jobs WHERE status = 'running') AS running_monitors,
+            (SELECT MAX(CAST(JSON_EXTRACT(metrics_json, '$.total_return_pct') AS DECIMAL(20,6)))
+             FROM dex_backtest_results WHERE status = 'completed') AS best_return,
+            (SELECT MAX(CAST(JSON_EXTRACT(metrics_json, '$.sharpe_ratio') AS DECIMAL(20,6)))
+             FROM dex_backtest_results WHERE status = 'completed') AS best_sharpe
+    """
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, None, True)
+    return rows[0] if rows else {}
+
+
+async def public_monitor_stats() -> dict:
+    """前台监控页统计数据。"""
+    sql = """
+        SELECT
+            (SELECT COUNT(*) FROM dex_monitor_jobs WHERE status = 'running') AS running,
+            (SELECT COUNT(*) FROM dex_monitor_jobs) AS total,
+            (SELECT SUM(total_signals) FROM dex_monitor_jobs) AS total_signals,
+            (SELECT SUM(total_cycles) FROM dex_monitor_jobs) AS total_cycles
+    """
+    rows = await asyncio.to_thread(mysql.execute_sql, sql, None, True)
+    return rows[0] if rows else {}

@@ -3,9 +3,31 @@
 {% block nav_rank %}font-semibold text-brand-400{% endblock %}
 
 {% block content %}
-<div class="mb-6">
-    <h2 class="text-2xl font-bold mb-1">策略排行榜</h2>
-    <p class="text-sm text-slate-400">按回测绩效排名，展示最新一次回测结果</p>
+<div class="mb-6 flex items-end justify-between">
+    <div>
+        <h2 class="text-2xl font-bold mb-1">策略排行榜</h2>
+        <p class="text-sm text-slate-400">按回测绩效排名，展示最新一次回测结果</p>
+    </div>
+    <a href="/about" class="text-sm text-brand-400 hover:text-brand-500 transition-colors">了解平台 &rarr;</a>
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">策略总数</div>
+        <div class="text-2xl font-bold">{{ stats.total_strategies or 0 }}</div>
+    </div>
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">回测总数</div>
+        <div class="text-2xl font-bold">{{ stats.total_backtests or 0 }}</div>
+    </div>
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">最佳收益</div>
+        <div class="text-2xl font-bold text-profit">{{ "%.1f"|format(stats.best_return or 0) }}%</div>
+    </div>
+    <div class="glass rounded-xl p-4 stat-card">
+        <div class="text-xs text-slate-400 mb-1">最高 Sharpe</div>
+        <div class="text-2xl font-bold text-brand-400">{{ "%.2f"|format(stats.best_sharpe or 0) }}</div>
+    </div>
 </div>
 
 <div class="glass rounded-xl p-4 mb-4 flex items-center gap-3 text-sm">
