@@ -58,7 +58,7 @@
                     <td class="px-4 py-3 text-right font-mono">{{ "%.1f"|format((m.win_rate or 0) * 100) }}%</td>
                     <td class="px-4 py-3 text-right font-mono">{{ m.total_trades or 0 }}</td>
                     <td class="px-4 py-3 text-right text-xs text-slate-500">{{ "%.1f"|format((b.elapsed_ms or 0) / 1000) }}s</td>
-                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ b.created_at[:16] if b.created_at else '-' }}</td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ (b.created_at|string)[:16] if b.created_at else '-' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

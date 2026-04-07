@@ -43,7 +43,7 @@
                     </td>
                     <td class="px-4 py-3 text-right font-mono">{{ s.backtest_count }}</td>
                     <td class="px-4 py-3 font-mono text-xs text-slate-400">{{ s.machine_code[:12] if s.machine_code else '-' }}...</td>
-                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ s.updated_at[:16] if s.updated_at else '-' }}</td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ (s.updated_at|string)[:16] if s.updated_at else '-' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

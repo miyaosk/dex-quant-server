@@ -41,7 +41,7 @@
                         <span class="tag tag-loss">{{ u.status }}</span>
                         {% endif %}
                     </td>
-                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ u.created_at[:19] if u.created_at else '-' }}</td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ (u.created_at|string)[:19] if u.created_at else '-' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

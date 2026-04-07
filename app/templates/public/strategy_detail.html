@@ -143,7 +143,7 @@
         <div class="flex items-center justify-between p-3 rounded-lg bg-surface-2/50 text-sm">
             <div>
                 <code class="text-xs text-slate-400">{{ bt.backtest_id[:16] }}...</code>
-                <span class="ml-2">{{ bt.created_at[:19] if bt.created_at else '-' }}</span>
+                <span class="ml-2">{{ (bt.created_at|string)[:19] if bt.created_at else '-' }}</span>
             </div>
             <div class="flex items-center gap-4">
                 <span class="font-mono {% if (bm.total_return_pct or 0) >= 0 %}text-profit{% else %}text-loss{% endif %}">

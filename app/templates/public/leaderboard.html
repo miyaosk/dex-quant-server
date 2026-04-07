@@ -82,7 +82,7 @@
                         {% endif %}
                     </td>
                     <td class="px-4 py-3 text-right text-xs text-slate-500">
-                        {{ s.backtest_at[:10] if s.backtest_at else '-' }}
+                        {{ (s.backtest_at|string)[:10] if s.backtest_at else '-' }}
                     </td>
                 </tr>
                 {% endfor %}

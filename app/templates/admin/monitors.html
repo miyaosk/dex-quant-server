@@ -43,8 +43,8 @@
                     <td class="px-4 py-3 text-right font-mono">{{ m.total_cycles }}</td>
                     <td class="px-4 py-3 text-right font-mono text-brand-400">{{ m.total_signals }}</td>
                     <td class="px-4 py-3 font-mono text-xs text-slate-400">{{ m.machine_code[:12] }}...</td>
-                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ m.last_run_at[:16] if m.last_run_at else '-' }}</td>
-                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ m.created_at[:10] if m.created_at else '-' }}</td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ (m.last_run_at|string)[:16] if m.last_run_at else '-' }}</td>
+                    <td class="px-4 py-3 text-right text-xs text-slate-500">{{ (m.created_at|string)[:10] if m.created_at else '-' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
