@@ -1,5 +1,5 @@
 """
-策略监控 API — 服务器端定时执行策略、生成信号（DB 持久化）
+策略监控 API — 服务器端定时执行策略、生成信号、自动下单
 
 限制：每个用户同时最多运行 3 个策略监控，超出需在本地运行。
 
@@ -7,6 +7,10 @@
   - 监控任务存 dex_monitor_jobs 表，服务器重启自动恢复 running 任务
   - 每轮产生的可执行信号存 dex_monitor_signals 表
   - 任务状态实时同步到 DB
+
+自动下单：
+  - 用户通过 Vault 安全链接提交私钥后，信号产生时自动下单到 Hyperliquid
+  - 未配置 Vault 的用户仅推送信号，不下单
 
 API:
   1. POST /monitor/start      — 启动监控
@@ -402,6 +406,8 @@ async def _monitor_loop(job_id: str, job_data: dict):
             if actionable:
                 await database.save_monitor_signals(job_id, total_cycles, actionable)
 
+                await _try_auto_trade(job_id, job_data, actionable, risk_rules)
+
             logger.info(
                 f"[{job_id}] 信号: 总{len(signals)} / 可执行{new_signals} | "
                 f"累计={total_signals}"
@@ -438,6 +444,60 @@ async def _monitor_loop(job_id: str, job_data: dict):
 
     _running_tasks.pop(job_id, None)
     logger.info(f"[{job_id}] 监控循环结束 | 共 {total_cycles} 轮")
+
+
+# ═══════════════ 自动下单 ═══════════════
+
+
+async def _try_auto_trade(job_id: str, job_data: dict, signals: list[dict], risk_rules: dict):
+    """有 vault 密钥时自动执行交易信号，否则跳过。"""
+    machine_code = job_data.get("machine_code", "")
+    if not machine_code:
+        return
+
+    try:
+        from app.routers.vault import get_decrypted_key, get_vault_network
+    except ImportError:
+        return
+
+    private_key = await get_decrypted_key(machine_code)
+    if not private_key:
+        return
+
+    network = await get_vault_network(machine_code)
+    max_pos_pct = risk_rules.get("max_position_pct", 10.0)
+    max_concurrent = risk_rules.get("max_concurrent", 3)
+
+    try:
+        from app.core.trade_executor import HyperliquidExecutor
+        executor = await asyncio.to_thread(HyperliquidExecutor, private_key, network)
+    except Exception as e:
+        logger.error(f"[{job_id}] HyperliquidExecutor init failed: {e}")
+        return
+
+    for sig in signals:
+        try:
+            result = await asyncio.to_thread(
+                executor.execute_signal,
+                symbol=sig.get("symbol", ""),
+                action=sig.get("action", ""),
+                direction=sig.get("direction", "long"),
+                confidence=sig.get("confidence", 0.7),
+                max_position_pct=max_pos_pct,
+                max_concurrent=max_concurrent,
+            )
+            status = result.get("status", "unknown")
+            if status == "executed":
+                logger.info(
+                    f"[{job_id}] TRADE {result.get('action','')} {result.get('coin','')} "
+                    f"size={result.get('size',0)} @ {result.get('price',0):.2f} | {network}"
+                )
+            elif status == "skipped":
+                logger.info(f"[{job_id}] TRADE skipped: {result.get('reason','')}")
+            else:
+                logger.warning(f"[{job_id}] TRADE error: {result.get('reason','')}")
+        except Exception as e:
+            logger.error(f"[{job_id}] TRADE exception: {e}")
 
 
 # ═══════════════ 启动恢复 ═══════════════
