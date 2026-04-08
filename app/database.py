@@ -777,8 +777,9 @@ async def leaderboard_strategies(
         SELECT
             s.strategy_id, s.name, s.symbol, s.timeframe, s.direction, s.status AS strategy_status,
             b.backtest_id, b.conclusion,
-            b.metrics_json,
-            b.created_at AS backtest_at
+            b.metrics_json, b.config_json,
+            b.created_at AS backtest_at,
+            b.elapsed_ms
         FROM dex_strategies s
         INNER JOIN dex_backtest_results b ON b.strategy_id = s.strategy_id AND b.status = 'completed'
         LEFT JOIN dex_backtest_results b_newer
@@ -799,6 +800,21 @@ async def leaderboard_strategies(
                 row["metrics"] = row["metrics_json"]
         else:
             row["metrics"] = {}
+
+        cfg = row.get("config_json")
+        if cfg:
+            if isinstance(cfg, str):
+                try:
+                    cfg = json.loads(cfg)
+                except (json.JSONDecodeError, TypeError):
+                    cfg = {}
+            row["bt_start"] = cfg.get("start_date", "")
+            row["bt_end"] = cfg.get("end_date", "")
+            row["bt_leverage"] = cfg.get("leverage", 1)
+        else:
+            row["bt_start"] = ""
+            row["bt_end"] = ""
+            row["bt_leverage"] = 1
     return rows
 
 
@@ -811,13 +827,13 @@ async def get_strategy_detail_with_backtest(strategy_id: str) -> Optional[dict]:
     backtests = await asyncio.to_thread(
         mysql.execute_sql,
         "SELECT backtest_id, strategy_name, conclusion, status, metrics_json, "
-        "trades_json, equity_json, created_at, elapsed_ms "
+        "trades_json, equity_json, config_json, created_at, elapsed_ms "
         "FROM dex_backtest_results WHERE strategy_id = %s ORDER BY created_at DESC LIMIT 5",
         (strategy_id,),
         True,
     )
     for bt in backtests:
-        for field in ("metrics_json", "trades_json", "equity_json"):
+        for field in ("metrics_json", "trades_json", "equity_json", "config_json"):
             if bt.get(field) and isinstance(bt[field], str):
                 try:
                     bt[field] = json.loads(bt[field])

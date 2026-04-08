@@ -28,6 +28,18 @@
 {% if strategy.backtests %}
 {% set latest = strategy.backtests[0] %}
 {% set m = latest.metrics_json if latest.metrics_json is mapping else {} %}
+{% set cfg = latest.config_json if latest.config_json is mapping else {} %}
+
+<div class="glass rounded-xl p-4 mb-6 flex items-center gap-2 text-sm">
+    <span class="tag" style="background: rgba(234,179,8,0.15); color: #eab308;">回测数据</span>
+    <span class="text-slate-400">
+        {% if cfg.start_date and cfg.end_date %}
+            回测区间: {{ cfg.start_date }} ~ {{ cfg.end_date }}
+            · 杠杆 {{ cfg.leverage or 1 }}x
+        {% endif %}
+        · 非实盘收益，不构成投资建议
+    </span>
+</div>
 
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
     <div class="glass rounded-xl p-4 stat-card">

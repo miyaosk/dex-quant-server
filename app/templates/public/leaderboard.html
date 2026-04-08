@@ -6,7 +6,9 @@
 <div class="mb-6 flex items-end justify-between">
     <div>
         <h2 class="text-2xl font-bold mb-1">策略排行榜</h2>
-        <p class="text-sm text-slate-400">按回测绩效排名，展示最新一次回测结果</p>
+        <p class="text-sm text-slate-400">
+            按<span class="text-yellow-500/80">回测</span>绩效排名 · 展示每个策略最新一次回测结果 · 非实盘收益
+        </p>
     </div>
     <a href="/about" class="text-sm text-brand-400 hover:text-brand-500 transition-colors">了解平台 &rarr;</a>
 </div>
@@ -63,7 +65,8 @@
                     <th class="px-4 py-3 text-right">最大回撤</th>
                     <th class="px-4 py-3 text-right">交易次数</th>
                     <th class="px-4 py-3 text-center">结论</th>
-                    <th class="px-4 py-3 text-right">回测时间</th>
+                    <th class="px-4 py-3 text-center">杠杆</th>
+                    <th class="px-4 py-3 text-right">回测区间</th>
                 </tr>
             </thead>
             <tbody>
@@ -103,8 +106,15 @@
                         <span class="tag tag-neutral">{{ s.conclusion or '-' }}</span>
                         {% endif %}
                     </td>
-                    <td class="px-4 py-3 text-right text-xs text-slate-500">
-                        {{ (s.backtest_at|string)[:10] if s.backtest_at else '-' }}
+                    <td class="px-4 py-3 text-center font-mono text-xs text-slate-400">{{ s.bt_leverage or 1 }}x</td>
+                    <td class="px-4 py-3 text-right text-xs">
+                        {% if s.bt_start and s.bt_end %}
+                        <span class="text-slate-400">{{ s.bt_start[:10] }}</span>
+                        <span class="text-slate-600">~</span>
+                        <span class="text-slate-400">{{ s.bt_end[:10] }}</span>
+                        {% else %}
+                        <span class="text-slate-500">{{ (s.backtest_at|string)[:10] if s.backtest_at else '-' }}</span>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
