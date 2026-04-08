@@ -693,6 +693,205 @@ def run_backtest(
     }
 
 
+def run_backtest_multi(
+    dfs: dict[str, pd.DataFrame],
+    signals: list[dict],
+    config: dict,
+    metrics_only: bool = False,
+) -> dict:
+    """
+    多币种信号驱动回测。
+
+    与 run_backtest 的区别：接收多个币的 K 线 DataFrame，
+    按时间合并驱动引擎，每个信号匹配到对应币种的 K 线数据。
+    共享同一个账户，仓位按 symbol 隔离。
+    """
+    if not dfs:
+        return {"metrics": {}, "trades": [], "equity_curve": [], "error": "数据为空"}
+
+    leverage = config.get("leverage", 1)
+    direction = config.get("direction", "long_short")
+    risk_per_trade = config.get("risk_per_trade", 0.02)
+
+    engine = BacktestEngine(
+        initial_capital=config.get("initial_capital", 100_000.0),
+        default_leverage=leverage,
+        margin_mode=config.get("margin_mode", "isolated"),
+        slippage_bps=config.get("slippage_bps", 5.0),
+        taker_fee=config.get("fee_rate", 0.0005),
+        maker_fee=config.get("fee_rate", 0.0005) * 0.4,
+    )
+
+    signal_map: dict[str, list[dict]] = {}
+    for sig in signals:
+        ts = _normalize_ts(sig.get("timestamp", ""))
+        if ts not in signal_map:
+            signal_map[ts] = []
+        signal_map[ts].append(sig)
+
+    all_times: dict[str, dict[str, dict]] = {}
+    for sym, df in dfs.items():
+        for idx in range(len(df)):
+            row = df.iloc[idx]
+            dt_key = _normalize_ts(row["datetime"])
+            if dt_key not in all_times:
+                all_times[dt_key] = {}
+            all_times[dt_key][sym] = {
+                "close": float(row["close"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "datetime": str(row["datetime"]),
+            }
+
+    sorted_keys = sorted(all_times.keys())
+    signals_executed = 0
+    holding_bars: dict[str, int] = {}
+    all_holding: list[int] = []
+    bar_idx = 0
+
+    for dt_key in sorted_keys:
+        bar_data = all_times[dt_key]
+        dt_str = next(iter(bar_data.values()))["datetime"]
+
+        bar_signals = signal_map.get(dt_key, [])
+        for sig in bar_signals:
+            sig_symbol = sig.get("symbol", config.get("symbol", ""))
+            if sig_symbol not in bar_data:
+                continue
+
+            action = sig.get("action", "").lower()
+            sig_direction = sig.get("direction", "long").lower()
+            reason = sig.get("reason", "")
+            sl = sig.get("suggested_stop_loss")
+            tp = sig.get("suggested_take_profit")
+            close = bar_data[sig_symbol]["close"]
+            pos = engine.account.get_position(sig_symbol)
+
+            if action == "buy":
+                if sig_direction == "long" and pos.side == "short":
+                    engine.close_short(sig_symbol, 0, close, close, dt_str, reason)
+                    if sig_symbol in holding_bars:
+                        all_holding.append(bar_idx - holding_bars.pop(sig_symbol))
+                elif sig_direction == "short" and pos.side == "long":
+                    engine.close_long(sig_symbol, 0, close, close, dt_str, reason)
+                    if sig_symbol in holding_bars:
+                        all_holding.append(bar_idx - holding_bars.pop(sig_symbol))
+
+                pos = engine.account.get_position(sig_symbol)
+                if pos.side == "none":
+                    qty = _calc_position_size(engine.account.available_balance, close, leverage, risk_per_trade)
+                    if qty > 0:
+                        if sig_direction == "long" and direction in ("long", "long_short", "long_only"):
+                            engine.open_long(sig_symbol, qty, close, close, dt_str, leverage, reason)
+                        elif sig_direction == "short" and direction in ("short", "short_only", "long_short"):
+                            engine.open_short(sig_symbol, qty, close, close, dt_str, leverage, reason)
+
+                        pos = engine.account.get_position(sig_symbol)
+                        if pos.side != "none":
+                            if sl is not None:
+                                pos.stop_loss = sl
+                            if tp is not None:
+                                pos.take_profit = tp
+                            holding_bars[sig_symbol] = bar_idx
+                            signals_executed += 1
+
+            elif action in ("sell", "close"):
+                if pos.side == "long":
+                    engine.close_long(sig_symbol, 0, close, close, dt_str, reason)
+                    signals_executed += 1
+                elif pos.side == "short":
+                    engine.close_short(sig_symbol, 0, close, close, dt_str, reason)
+                    signals_executed += 1
+                if sig_symbol in holding_bars:
+                    all_holding.append(bar_idx - holding_bars.pop(sig_symbol))
+
+        on_bar_data = {}
+        for sym, bd in bar_data.items():
+            on_bar_data[sym] = {"close": bd["close"], "high": bd["high"], "low": bd["low"], "mark_price": bd["close"]}
+        engine.on_bar(dt_str, on_bar_data)
+        bar_idx += 1
+
+    for sym, pos in list(engine.account.positions.items()):
+        if pos.side != "none" and sym in all_times.get(sorted_keys[-1], {}):
+            close = all_times[sorted_keys[-1]][sym]["close"]
+            dt_str = all_times[sorted_keys[-1]][sym]["datetime"]
+            if pos.side == "long":
+                engine.close_long(sym, 0, close, close, dt_str, "回测结束平仓")
+            else:
+                engine.close_short(sym, 0, close, close, dt_str, "回测结束平仓")
+
+    perf = engine.compute_performance()
+    eq_data = perf.get("equity_curve", [])
+    trades_raw = perf.get("trade_log", [])
+    p = perf.get("performance", {})
+
+    total_trades = len([t for t in trades_raw if t.get("action") == "close"])
+    winning = len([t for t in trades_raw if t.get("action") == "close" and t.get("realized_pnl", 0) > 0])
+    losing = len([t for t in trades_raw if t.get("action") == "close" and t.get("realized_pnl", 0) < 0])
+    win_rate = winning / total_trades if total_trades > 0 else 0
+
+    wins = [t["realized_pnl"] for t in trades_raw if t.get("action") == "close" and t.get("realized_pnl", 0) > 0]
+    losses = [abs(t["realized_pnl"]) for t in trades_raw if t.get("action") == "close" and t.get("realized_pnl", 0) < 0]
+    avg_win = np.mean(wins) if wins else 0
+    avg_loss = np.mean(losses) if losses else 1
+    plr = avg_win / avg_loss if avg_loss > 0 else 0
+    avg_hold = np.mean(all_holding) if all_holding else 0
+
+    metrics = {
+        "total_return": p.get("total_return", 0),
+        "total_return_pct": p.get("total_return", 0),
+        "annual_return_pct": p.get("annual_return", 0),
+        "sharpe_ratio": p.get("sharpe_ratio", 0),
+        "sortino_ratio": p.get("sortino_ratio", 0),
+        "max_drawdown_pct": p.get("max_drawdown", 0),
+        "calmar_ratio": p.get("calmar_ratio", 0),
+        "win_rate": win_rate,
+        "profit_loss_ratio": plr,
+        "total_trades": total_trades,
+        "winning_trades": winning,
+        "losing_trades": losing,
+        "avg_holding_bars": avg_hold,
+        "total_commission": p.get("total_commission", 0),
+        "total_slippage_cost": p.get("total_slippage_cost", 0),
+        "net_funding": p.get("net_funding", 0),
+        "liquidation_count": p.get("liquidation_count", 0),
+        "final_balance": engine.account.equity,
+        "peak_balance": max((e.get("equity", 0) for e in eq_data), default=engine.account.equity),
+        "total_signals": len(signals),
+        "signals_executed": signals_executed,
+        "symbols_traded": list(dfs.keys()),
+    }
+    metrics = _sanitize_floats(metrics)
+
+    if metrics_only:
+        return {"metrics": metrics, "trades": [], "equity_curve": []}
+
+    formatted_trades = []
+    running_balance = engine.account.initial_capital
+    for i, t in enumerate(trades_raw):
+        pnl = t.get("realized_pnl", 0)
+        running_balance += pnl - t.get("commission", 0)
+        formatted_trades.append(_sanitize_floats({
+            "trade_id": i + 1,
+            "datetime": t.get("datetime", ""),
+            "action": t.get("action", ""),
+            "side": t.get("side", ""),
+            "symbol": t.get("symbol", ""),
+            "price": t.get("price", 0),
+            "quantity": t.get("quantity", 0),
+            "leverage": t.get("leverage", leverage),
+            "fee": t.get("commission", 0),
+            "pnl": pnl,
+            "pnl_pct": pnl / (t.get("price", 1) * t.get("quantity", 1) / leverage) if t.get("price", 0) * t.get("quantity", 0) > 0 else 0,
+            "balance_after": running_balance,
+            "reason": t.get("reason", ""),
+        }))
+
+    equity_curve_out = [_sanitize_floats({"datetime": e["datetime"], "equity": e["equity"]}) for e in eq_data]
+
+    return {"metrics": metrics, "trades": formatted_trades, "equity_curve": equity_curve_out}
+
+
 def _sanitize_floats(d: dict) -> dict:
     """将 dict 中所有 NaN/Inf/numpy 类型转为 JSON 安全值。"""
     clean = {}

@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from app.core.backtest_engine import run_backtest
+from app.core.backtest_engine import run_backtest, run_backtest_multi
 from app.services.data_service import DataService
 from app import database
 
@@ -44,7 +44,7 @@ class BacktestService:
         config: dict,
     ) -> dict:
         """
-        执行完整回测流程。
+        执行完整回测流程，支持多币种信号。
 
         返回 BacktestResponse 格式的 dict。
         """
@@ -56,28 +56,38 @@ class BacktestService:
             if not signals:
                 raise ValueError("信号列表为空，无法回测")
 
+            sig_symbols = list({s.get("symbol", symbol) for s in signals if s.get("symbol")})
+            if not sig_symbols:
+                sig_symbols = [symbol]
+
+            all_symbols = list(set(sig_symbols + ([symbol] if symbol else [])))
+
             logger.info(
-                f"[{backtest_id}] 开始回测: {symbol} {timeframe} "
+                f"[{backtest_id}] 开始回测: {','.join(all_symbols)} {timeframe} "
                 f"{start_date} → {end_date} | {len(signals)} 个信号"
             )
 
-            # 1) 拉 K 线数据（带缓存）
-            df = await self.data_service.get_klines(
-                symbol=symbol,
-                interval=timeframe,
-                start_date=start_date,
-                end_date=end_date,
-                market="crypto_futures",
-            )
+            dfs: dict[str, pd.DataFrame] = {}
+            for sym in all_symbols:
+                df = await self.data_service.get_klines(
+                    symbol=sym,
+                    interval=timeframe,
+                    start_date=start_date,
+                    end_date=end_date,
+                    market="crypto_futures",
+                )
+                if not df.empty:
+                    dfs[sym] = df
+                    logger.info(f"[{backtest_id}] {sym}: {len(df)} 根 K 线")
 
-            if df.empty:
-                raise ValueError(f"未获取到 {symbol} 的 K 线数据")
+            if not dfs:
+                raise ValueError(f"未获取到任何币种的 K 线数据")
 
-            logger.info(f"[{backtest_id}] 获取到 {len(df)} 根 K 线")
+            primary_symbol = symbol if symbol in dfs else list(dfs.keys())[0]
 
-            # 2) 运行信号驱动回测
             bt_config = {
-                "symbol": symbol,
+                "symbol": primary_symbol,
+                "symbols": list(dfs.keys()),
                 "initial_capital": config.get("initial_capital", 100_000.0),
                 "leverage": config.get("leverage", 1),
                 "fee_rate": config.get("fee_rate", 0.0005),
@@ -87,7 +97,10 @@ class BacktestService:
                 "risk_per_trade": config.get("risk_per_trade", 0.02),
             }
 
-            result = run_backtest(df=df, signals=signals, config=bt_config)
+            if len(dfs) == 1:
+                result = run_backtest(df=list(dfs.values())[0], signals=signals, config=bt_config)
+            else:
+                result = run_backtest_multi(dfs=dfs, signals=signals, config=bt_config)
 
             elapsed_ms = int((time.time() - start_ts) * 1000)
             status = "completed"

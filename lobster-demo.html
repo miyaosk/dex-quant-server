@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>三种龙虾动画实现方式</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0a0a1a;
+    color: #e0e0e0;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  header {
+    text-align: center;
+    padding: 60px 20px 30px;
+  }
+  header h1 {
+    font-size: 2.4rem;
+    background: linear-gradient(135deg, #ff6b6b, #ff8e53, #ffd93d);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 12px;
+  }
+  header p {
+    color: #888;
+    font-size: 1.1rem;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 30px;
+  }
+
+  .card {
+    background: linear-gradient(145deg, #12122a, #1a1a35);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 20px;
+    overflow: hidden;
+    transition: transform 0.3s, box-shadow 0.3s;
+  }
+  .card:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+  }
+
+  .card-header {
+    padding: 24px 28px 0;
+  }
+  .card-header .badge {
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .badge-lottie { background: rgba(99,102,241,0.2); color: #818cf8; }
+  .badge-svg    { background: rgba(16,185,129,0.2); color: #34d399; }
+  .badge-three  { background: rgba(244,114,182,0.2); color: #f472b6; }
+
+  .card-header h2 {
+    margin-top: 14px;
+    font-size: 1.35rem;
+    color: #fff;
+  }
+  .card-header p {
+    margin-top: 8px;
+    font-size: 0.88rem;
+    color: #666;
+    line-height: 1.6;
+  }
+
+  .card-canvas {
+    width: 100%;
+    height: 320px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+
+  .card-footer {
+    padding: 0 28px 24px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .tech-tag {
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    background: rgba(255,255,255,0.05);
+    color: #999;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  /* ========== SVG Lobster Styles ========== */
+  .svg-lobster { cursor: pointer; }
+
+  .svg-lobster .body {
+    animation: bodyBob 3s ease-in-out infinite;
+    transform-origin: center center;
+  }
+  @keyframes bodyBob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+  }
+
+  .svg-lobster .left-claw {
+    animation: clawWaveLeft 2s ease-in-out infinite;
+    transform-origin: 95px 110px;
+  }
+  @keyframes clawWaveLeft {
+    0%, 100% { transform: rotate(0deg); }
+    25% { transform: rotate(-18deg); }
+    75% { transform: rotate(5deg); }
+  }
+
+  .svg-lobster .right-claw {
+    animation: clawWaveRight 2s ease-in-out 0.3s infinite;
+    transform-origin: 205px 110px;
+  }
+  @keyframes clawWaveRight {
+    0%, 100% { transform: rotate(0deg); }
+    25% { transform: rotate(18deg); }
+    75% { transform: rotate(-5deg); }
+  }
+
+  .svg-lobster .left-eye {
+    animation: blink 4s ease-in-out infinite;
+    transform-origin: center;
+  }
+  .svg-lobster .right-eye {
+    animation: blink 4s ease-in-out 0.1s infinite;
+    transform-origin: center;
+  }
+  @keyframes blink {
+    0%, 42%, 46%, 100% { transform: scaleY(1); }
+    44% { transform: scaleY(0.1); }
+  }
+
+  .svg-lobster .antenna-left {
+    animation: antennaSwing 2.5s ease-in-out infinite;
+    transform-origin: 130px 78px;
+  }
+  .svg-lobster .antenna-right {
+    animation: antennaSwing 2.5s ease-in-out 0.4s infinite;
+    transform-origin: 170px 78px;
+  }
+  @keyframes antennaSwing {
+    0%, 100% { transform: rotate(0deg); }
+    50% { transform: rotate(8deg); }
+  }
+
+  .svg-lobster .tail {
+    animation: tailWag 2s ease-in-out infinite;
+    transform-origin: 150px 230px;
+  }
+  @keyframes tailWag {
+    0%, 100% { transform: rotate(0deg); }
+    33% { transform: rotate(-4deg); }
+    66% { transform: rotate(4deg); }
+  }
+
+  .svg-lobster .leg {
+    animation: legWalk 1.5s ease-in-out infinite;
+    transform-origin: top;
+  }
+  .svg-lobster .leg:nth-child(odd) { animation-delay: 0s; }
+  .svg-lobster .leg:nth-child(even) { animation-delay: 0.2s; }
+  @keyframes legWalk {
+    0%, 100% { transform: rotate(-3deg); }
+    50% { transform: rotate(3deg); }
+  }
+
+  .svg-lobster .bubble {
+    animation: bubbleFloat 3s ease-in-out infinite;
+    opacity: 0;
+  }
+  .svg-lobster .bubble:nth-child(1) { animation-delay: 0s; }
+  .svg-lobster .bubble:nth-child(2) { animation-delay: 1s; }
+  .svg-lobster .bubble:nth-child(3) { animation-delay: 2s; }
+  @keyframes bubbleFloat {
+    0%   { opacity: 0; transform: translateY(0) scale(0.5); }
+    30%  { opacity: 0.7; }
+    100% { opacity: 0; transform: translateY(-60px) scale(1.2); }
+  }
+
+  /* ========== Lottie ========== */
+  #lottie-container {
+    width: 260px;
+    height: 260px;
+  }
+  .lottie-fallback {
+    text-align: center;
+    color: #666;
+    font-size: 0.9rem;
+  }
+  .lottie-fallback .emoji {
+    font-size: 5rem;
+    display: block;
+    margin-bottom: 10px;
+    animation: lobsterDance 1s ease-in-out infinite alternate;
+  }
+  @keyframes lobsterDance {
+    from { transform: rotate(-10deg) scale(1); }
+    to   { transform: rotate(10deg) scale(1.1); }
+  }
+
+  /* ========== Three.js ========== */
+  #three-canvas {
+    width: 100%;
+    height: 100%;
+  }
+
+  footer {
+    text-align: center;
+    padding: 50px 20px;
+    color: #444;
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🦞 三种龙虾动画实现方式</h1>
+  <p>Lottie · SVG + CSS · Three.js — 一个页面全部展示</p>
+</header>
+
+<div class="container">
+
+  <!-- Card 1: Lottie -->
+  <div class="card">
+    <div class="card-header">
+      <span class="badge badge-lottie">方式一</span>
+      <h2>Lottie 动画</h2>
+      <p>After Effects 导出 JSON，lottie-web 渲染。<br>文件小、矢量无损、支持交互控制。</p>
+    </div>
+    <div class="card-canvas">
+      <div id="lottie-container"></div>
+    </div>
+    <div class="card-footer">
+      <span class="tech-tag">lottie-web</span>
+      <span class="tech-tag">After Effects</span>
+      <span class="tech-tag">Bodymovin</span>
+      <span class="tech-tag">JSON</span>
+    </div>
+  </div>
+
+  <!-- Card 2: SVG + CSS -->
+  <div class="card">
+    <div class="card-header">
+      <span class="badge badge-svg">方式二</span>
+      <h2>SVG + CSS 动画</h2>
+      <p>纯矢量绘制 + CSS keyframes 驱动。<br>零依赖、轻量级、高度可定制。</p>
+    </div>
+    <div class="card-canvas">
+      <svg class="svg-lobster" viewBox="0 0 300 320" width="260" height="280">
+        <defs>
+          <radialGradient id="bodyGrad" cx="50%" cy="40%" r="60%">
+            <stop offset="0%" stop-color="#ff6b6b"/>
+            <stop offset="100%" stop-color="#c0392b"/>
+          </radialGradient>
+          <radialGradient id="clawGrad" cx="50%" cy="50%" r="60%">
+            <stop offset="0%" stop-color="#ff8a80"/>
+            <stop offset="100%" stop-color="#d63031"/>
+          </radialGradient>
+          <filter id="shadow">
+            <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.3"/>
+          </filter>
+        </defs>
+
+        <!-- Bubbles -->
+        <g>
+          <circle class="bubble" cx="80" cy="60" r="4" fill="rgba(255,255,255,0.3)"/>
+          <circle class="bubble" cx="220" cy="45" r="3" fill="rgba(255,255,255,0.25)"/>
+          <circle class="bubble" cx="180" cy="55" r="5" fill="rgba(255,255,255,0.2)"/>
+        </g>
+
+        <g class="body" filter="url(#shadow)">
+          <!-- Tail -->
+          <g class="tail">
+            <ellipse cx="150" cy="260" rx="30" ry="18" fill="url(#bodyGrad)"/>
+            <polygon points="120,265 150,295 180,265" fill="#c0392b" rx="5"/>
+            <ellipse cx="135" cy="272" rx="12" ry="6" fill="#e74c3c" opacity="0.5"/>
+            <ellipse cx="165" cy="272" rx="12" ry="6" fill="#e74c3c" opacity="0.5"/>
+          </g>
+
+          <!-- Legs -->
+          <g>
+            <line class="leg" x1="115" y1="185" x2="85" y2="215" stroke="#d63031" stroke-width="4" stroke-linecap="round"/>
+            <line class="leg" x1="110" y1="200" x2="78" y2="225" stroke="#d63031" stroke-width="4" stroke-linecap="round"/>
+            <line class="leg" x1="112" y1="215" x2="82" y2="240" stroke="#d63031" stroke-width="4" stroke-linecap="round"/>
+            <line class="leg" x1="185" y1="185" x2="215" y2="215" stroke="#d63031" stroke-width="4" stroke-linecap="round"/>
+            <line class="leg" x1="190" y1="200" x2="222" y2="225" stroke="#d63031" stroke-width="4" stroke-linecap="round"/>
+            <line class="leg" x1="188" y1="215" x2="218" y2="240" stroke="#d63031" stroke-width="4" stroke-linecap="round"/>
+          </g>
+
+          <!-- Body segments -->
+          <ellipse cx="150" cy="240" rx="35" ry="22" fill="url(#bodyGrad)"/>
+          <ellipse cx="150" cy="215" rx="38" ry="22" fill="url(#bodyGrad)"/>
+          <ellipse cx="150" cy="190" rx="40" ry="22" fill="url(#bodyGrad)"/>
+          <ellipse cx="150" cy="165" rx="42" ry="25" fill="url(#bodyGrad)"/>
+
+          <!-- Segment lines -->
+          <line x1="115" y1="230" x2="185" y2="230" stroke="#a93226" stroke-width="1" opacity="0.5"/>
+          <line x1="112" y1="205" x2="188" y2="205" stroke="#a93226" stroke-width="1" opacity="0.5"/>
+          <line x1="110" y1="180" x2="190" y2="180" stroke="#a93226" stroke-width="1" opacity="0.5"/>
+
+          <!-- Head -->
+          <ellipse cx="150" cy="130" rx="42" ry="38" fill="url(#bodyGrad)"/>
+
+          <!-- Antennae -->
+          <path class="antenna-left" d="M130,95 Q115,55 95,35" stroke="#d63031" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <circle cx="93" cy="33" r="4" fill="#ff6b6b"/>
+          <path class="antenna-right" d="M170,95 Q185,55 205,35" stroke="#d63031" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <circle cx="207" cy="33" r="4" fill="#ff6b6b"/>
+
+          <!-- Eyes -->
+          <g class="left-eye">
+            <circle cx="134" cy="118" r="12" fill="#fff"/>
+            <circle cx="136" cy="118" r="7" fill="#2c3e50"/>
+            <circle cx="138" cy="115" r="2.5" fill="#fff"/>
+          </g>
+          <g class="right-eye">
+            <circle cx="166" cy="118" r="12" fill="#fff"/>
+            <circle cx="168" cy="118" r="7" fill="#2c3e50"/>
+            <circle cx="170" cy="115" r="2.5" fill="#fff"/>
+          </g>
+
+          <!-- Mouth -->
+          <path d="M140,140 Q150,148 160,140" stroke="#a93226" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+          <!-- Arms -->
+          <line x1="110" y1="145" x2="75" y2="120" stroke="#d63031" stroke-width="6" stroke-linecap="round"/>
+          <line x1="190" y1="145" x2="225" y2="120" stroke="#d63031" stroke-width="6" stroke-linecap="round"/>
+
+          <!-- Left Claw -->
+          <g class="left-claw">
+            <ellipse cx="60" cy="105" rx="22" ry="14" fill="url(#clawGrad)" transform="rotate(-25,60,105)"/>
+            <ellipse cx="48" cy="92" rx="18" ry="10" fill="url(#clawGrad)" transform="rotate(-40,48,92)"/>
+            <ellipse cx="72" cy="92" rx="18" ry="10" fill="url(#clawGrad)" transform="rotate(-10,72,92)"/>
+          </g>
+
+          <!-- Right Claw -->
+          <g class="right-claw">
+            <ellipse cx="240" cy="105" rx="22" ry="14" fill="url(#clawGrad)" transform="rotate(25,240,105)"/>
+            <ellipse cx="252" cy="92" rx="18" ry="10" fill="url(#clawGrad)" transform="rotate(40,252,92)"/>
+            <ellipse cx="228" cy="92" rx="18" ry="10" fill="url(#clawGrad)" transform="rotate(10,228,92)"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <div class="card-footer">
+      <span class="tech-tag">SVG</span>
+      <span class="tech-tag">CSS Keyframes</span>
+      <span class="tech-tag">零依赖</span>
+    </div>
+  </div>
+
+  <!-- Card 3: Three.js -->
+  <div class="card">
+    <div class="card-header">
+      <span class="badge badge-three">方式三</span>
+      <h2>Three.js 3D 模型</h2>
+      <p>WebGL 渲染 3D 几何体组合。<br>支持光照、旋转、鼠标交互。</p>
+    </div>
+    <div class="card-canvas">
+      <canvas id="three-canvas"></canvas>
+    </div>
+    <div class="card-footer">
+      <span class="tech-tag">Three.js</span>
+      <span class="tech-tag">WebGL</span>
+      <span class="tech-tag">3D Geometry</span>
+      <span class="tech-tag">Shader</span>
+    </div>
+  </div>
+
+</div>
+
+<footer>使用浏览器直接打开此文件即可预览 · Lottie + SVG + Three.js</footer>
+
+<script>
+// ==================== 1. Lottie 动画 ====================
+(function initLottie() {
+  const container = document.getElementById('lottie-container');
+
+  const lobsterData = {
+    v: "5.7.4", fr: 30, ip: 0, op: 90, w: 300, h: 300,
+    assets: [],
+    layers: [
+      {
+        ty: 4, nm: "left-claw", sr: 1, ks: {
+          o: { a: 0, k: 100 }, r: { a: 1, k: [
+            { t: 0, s: [0], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 22, s: [-20], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 45, s: [0], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 67, s: [10], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 90, s: [0] }
+          ]},
+          p: { a: 0, k: [100, 140, 0] }, a: { a: 0, k: [0, 0, 0] }, s: { a: 0, k: [100, 100, 100] }
+        },
+        shapes: [
+          { ty: "el", p: { a: 0, k: [-30, -10] }, s: { a: 0, k: [40, 28] } },
+          { ty: "el", p: { a: 0, k: [-48, -24] }, s: { a: 0, k: [30, 20] } },
+          { ty: "el", p: { a: 0, k: [-18, -26] }, s: { a: 0, k: [30, 20] } },
+          { ty: "fl", c: { a: 0, k: [0.92, 0.34, 0.2, 1] } }
+        ], ip: 0, op: 90, st: 0
+      },
+      {
+        ty: 4, nm: "right-claw", sr: 1, ks: {
+          o: { a: 0, k: 100 }, r: { a: 1, k: [
+            { t: 0, s: [0], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 22, s: [20], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 45, s: [0], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 67, s: [-10], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 90, s: [0] }
+          ]},
+          p: { a: 0, k: [200, 140, 0] }, a: { a: 0, k: [0, 0, 0] }, s: { a: 0, k: [100, 100, 100] }
+        },
+        shapes: [
+          { ty: "el", p: { a: 0, k: [30, -10] }, s: { a: 0, k: [40, 28] } },
+          { ty: "el", p: { a: 0, k: [48, -24] }, s: { a: 0, k: [30, 20] } },
+          { ty: "el", p: { a: 0, k: [18, -26] }, s: { a: 0, k: [30, 20] } },
+          { ty: "fl", c: { a: 0, k: [0.92, 0.34, 0.2, 1] } }
+        ], ip: 0, op: 90, st: 0
+      },
+      {
+        ty: 4, nm: "body", sr: 1, ks: {
+          o: { a: 0, k: 100 }, r: { a: 0, k: 0 },
+          p: { a: 1, k: [
+            { t: 0, s: [150, 160, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 30, s: [150, 152, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 60, s: [150, 160, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 90, s: [150, 160, 0] }
+          ]},
+          a: { a: 0, k: [0, 0, 0] }, s: { a: 0, k: [100, 100, 100] }
+        },
+        shapes: [
+          { ty: "el", p: { a: 0, k: [0, 30] }, s: { a: 0, k: [70, 44] } },
+          { ty: "el", p: { a: 0, k: [0, 8] }, s: { a: 0, k: [76, 44] } },
+          { ty: "el", p: { a: 0, k: [0, -18] }, s: { a: 0, k: [80, 50] } },
+          { ty: "fl", c: { a: 0, k: [1, 0.42, 0.42, 1] } },
+          { ty: "el", p: { a: 0, k: [0, -50] }, s: { a: 0, k: [78, 70] } },
+          { ty: "fl", c: { a: 0, k: [1, 0.42, 0.42, 1] } }
+        ], ip: 0, op: 90, st: 0
+      },
+      {
+        ty: 4, nm: "left-eye", sr: 1, ks: {
+          o: { a: 0, k: 100 }, r: { a: 0, k: 0 },
+          p: { a: 1, k: [
+            { t: 0, s: [132, 100, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 30, s: [132, 92, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 60, s: [132, 100, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 90, s: [132, 100, 0] }
+          ]},
+          a: { a: 0, k: [0, 0, 0] },
+          s: { a: 1, k: [
+            { t: 38, s: [100, 100, 100], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 40, s: [100, 10, 100], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 42, s: [100, 100, 100] }
+          ]}
+        },
+        shapes: [
+          { ty: "el", p: { a: 0, k: [0, 0] }, s: { a: 0, k: [22, 22] } },
+          { ty: "fl", c: { a: 0, k: [1, 1, 1, 1] } },
+          { ty: "el", p: { a: 0, k: [2, 0] }, s: { a: 0, k: [13, 13] } },
+          { ty: "fl", c: { a: 0, k: [0.17, 0.24, 0.31, 1] } },
+          { ty: "el", p: { a: 0, k: [4, -3] }, s: { a: 0, k: [5, 5] } },
+          { ty: "fl", c: { a: 0, k: [1, 1, 1, 1] } }
+        ], ip: 0, op: 90, st: 0
+      },
+      {
+        ty: 4, nm: "right-eye", sr: 1, ks: {
+          o: { a: 0, k: 100 }, r: { a: 0, k: 0 },
+          p: { a: 1, k: [
+            { t: 0, s: [168, 100, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 30, s: [168, 92, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 60, s: [168, 100, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 90, s: [168, 100, 0] }
+          ]},
+          a: { a: 0, k: [0, 0, 0] },
+          s: { a: 1, k: [
+            { t: 38, s: [100, 100, 100], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 40, s: [100, 10, 100], i: { x: [0.5], y: [1] }, o: { x: [0.5], y: [0] } },
+            { t: 42, s: [100, 100, 100] }
+          ]}
+        },
+        shapes: [
+          { ty: "el", p: { a: 0, k: [0, 0] }, s: { a: 0, k: [22, 22] } },
+          { ty: "fl", c: { a: 0, k: [1, 1, 1, 1] } },
+          { ty: "el", p: { a: 0, k: [2, 0] }, s: { a: 0, k: [13, 13] } },
+          { ty: "fl", c: { a: 0, k: [0.17, 0.24, 0.31, 1] } },
+          { ty: "el", p: { a: 0, k: [4, -3] }, s: { a: 0, k: [5, 5] } },
+          { ty: "fl", c: { a: 0, k: [1, 1, 1, 1] } }
+        ], ip: 0, op: 90, st: 0
+      },
+      {
+        ty: 4, nm: "mouth", sr: 1, ks: {
+          o: { a: 0, k: 100 }, r: { a: 0, k: 0 },
+          p: { a: 1, k: [
+            { t: 0, s: [150, 125, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 30, s: [150, 117, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 60, s: [150, 125, 0], i: { x: 0.5, y: 1 }, o: { x: 0.5, y: 0 } },
+            { t: 90, s: [150, 125, 0] }
+          ]},
+          a: { a: 0, k: [0, 0, 0] }, s: { a: 0, k: [100, 100, 100] }
+        },
+        shapes: [
+          {
+            ty: "sh",
+            ks: { a: 0, k: {
+              c: false,
+              v: [[-10, 0], [0, 8], [10, 0]],
+              i: [[0, 0], [-5, 0], [0, 0]],
+              o: [[5, 5], [5, 0], [0, 0]]
+            }}
+          },
+          { ty: "st", c: { a: 0, k: [0.66, 0.2, 0.15, 1] }, w: { a: 0, k: 2.5 } },
+          { ty: "tr", p: { a: 0, k: [0, 0] }, a: { a: 0, k: [0, 0] }, s: { a: 0, k: [100, 100] }, r: { a: 0, k: 0 }, o: { a: 0, k: 100 } }
+        ], ip: 0, op: 90, st: 0
+      }
+    ]
+  };
+
+  try {
+    lottie.loadAnimation({
+      container: container,
+      renderer: 'svg',
+      loop: true,
+      autoplay: true,
+      animationData: lobsterData
+    });
+  } catch (e) {
+    container.innerHTML = '<div class="lottie-fallback"><span class="emoji">🦞</span>Lottie 加载失败，请检查网络</div>';
+  }
+})();
+
+// ==================== 2. SVG 动画（已由 CSS 驱动，此处加鼠标交互） ====================
+(function initSVG() {
+  const svg = document.querySelector('.svg-lobster');
+  if (!svg) return;
+
+  svg.addEventListener('click', () => {
+    svg.style.transition = 'transform 0.3s';
+    svg.style.transform = 'scale(1.15)';
+    setTimeout(() => { svg.style.transform = 'scale(1)'; }, 300);
+  });
+
+  svg.addEventListener('mousemove', (e) => {
+    const rect = svg.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width;
+    const eyes = svg.querySelectorAll('.left-eye circle:nth-child(2), .right-eye circle:nth-child(2)');
+    eyes.forEach(eye => {
+      const ox = parseFloat(eye.getAttribute('cx'));
+      eye.setAttribute('cx', ox + (mx - 0.5) * 3);
+    });
+  });
+})();
+
+// ==================== 3. Three.js 3D 龙虾 ====================
+(function initThree() {
+  const canvas = document.getElementById('three-canvas');
+  const container = canvas.parentElement;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 1000);
+  camera.position.set(0, 1, 8);
+
+  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambientLight);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(5, 5, 5);
+  scene.add(dirLight);
+  const pointLight = new THREE.PointLight(0xff6b6b, 0.6, 20);
+  pointLight.position.set(-3, 2, 4);
+  scene.add(pointLight);
+
+  const lobsterGroup = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0xe74c3c, roughness: 0.4, metalness: 0.1 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.5, metalness: 0.1 });
+  const eyeWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 });
+  const eyeBlack = new THREE.MeshStandardMaterial({ color: 0x2c3e50, roughness: 0.2 });
+
+  const headGeo = new THREE.SphereGeometry(0.9, 32, 32);
+  headGeo.scale(1, 1.1, 0.85);
+  const head = new THREE.Mesh(headGeo, bodyMat);
+  head.position.y = 1.4;
+  lobsterGroup.add(head);
+
+  for (let i = 0; i < 4; i++) {
+    const segGeo = new THREE.SphereGeometry(0.7 - i * 0.05, 24, 24);
+    segGeo.scale(1.1, 0.7, 0.8);
+    const seg = new THREE.Mesh(segGeo, i % 2 === 0 ? bodyMat : darkMat);
+    seg.position.y = 0.5 - i * 0.55;
+    lobsterGroup.add(seg);
+  }
+
+  const tailGeo = new THREE.ConeGeometry(0.5, 0.8, 8);
+  const tail = new THREE.Mesh(tailGeo, darkMat);
+  tail.position.y = -1.7;
+  tail.rotation.x = Math.PI;
+  lobsterGroup.add(tail);
+
+  const tailFanGeo = new THREE.CircleGeometry(0.45, 6);
+  const tailFan = new THREE.Mesh(tailFanGeo, bodyMat);
+  tailFan.position.y = -2.1;
+  tailFan.rotation.x = -0.3;
+  lobsterGroup.add(tailFan);
+
+  function makeEye(x) {
+    const eyeGroup = new THREE.Group();
+    const stalkGeo = new THREE.CylinderGeometry(0.06, 0.08, 0.4, 8);
+    const stalk = new THREE.Mesh(stalkGeo, bodyMat);
+    stalk.position.y = 0.2;
+    stalk.rotation.z = x > 0 ? -0.3 : 0.3;
+    eyeGroup.add(stalk);
+
+    const ballGeo = new THREE.SphereGeometry(0.16, 16, 16);
+    const ball = new THREE.Mesh(ballGeo, eyeWhite);
+    ball.position.set(x > 0 ? 0.1 : -0.1, 0.42, 0);
+    eyeGroup.add(ball);
+
+    const pupilGeo = new THREE.SphereGeometry(0.09, 12, 12);
+    const pupil = new THREE.Mesh(pupilGeo, eyeBlack);
+    pupil.position.set(x > 0 ? 0.14 : -0.14, 0.42, 0.1);
+    eyeGroup.add(pupil);
+
+    eyeGroup.position.set(x, 1.9, 0.2);
+    return eyeGroup;
+  }
+  lobsterGroup.add(makeEye(-0.35));
+  lobsterGroup.add(makeEye(0.35));
+
+  function makeClaw(side) {
+    const clawGroup = new THREE.Group();
+    const armGeo = new THREE.CylinderGeometry(0.1, 0.12, 1.5, 8);
+    const arm = new THREE.Mesh(armGeo, bodyMat);
+    arm.rotation.z = side * 0.8;
+    arm.position.set(side * 0.6, -0.1, 0);
+    clawGroup.add(arm);
+
+    const clawBodyGeo = new THREE.SphereGeometry(0.35, 16, 16);
+    clawBodyGeo.scale(1.3, 0.8, 0.7);
+    const clawBody = new THREE.Mesh(clawBodyGeo, bodyMat);
+    clawBody.position.set(side * 1.3, 0.5, 0);
+    clawGroup.add(clawBody);
+
+    const topPincer = new THREE.Mesh(
+      new THREE.ConeGeometry(0.18, 0.6, 8),
+      darkMat
+    );
+    topPincer.position.set(side * 1.7, 0.75, 0);
+    topPincer.rotation.z = side * 0.5;
+    clawGroup.add(topPincer);
+
+    const bottomPincer = new THREE.Mesh(
+      new THREE.ConeGeometry(0.15, 0.5, 8),
+      darkMat
+    );
+    bottomPincer.position.set(side * 1.7, 0.35, 0);
+    bottomPincer.rotation.z = side * 1.2;
+    clawGroup.add(bottomPincer);
+
+    clawGroup.position.set(side * 0.6, 1.2, 0);
+    return clawGroup;
+  }
+
+  const leftClaw = makeClaw(-1);
+  const rightClaw = makeClaw(1);
+  lobsterGroup.add(leftClaw);
+  lobsterGroup.add(rightClaw);
+
+  function makeLeg(side, yPos, angle) {
+    const legGeo = new THREE.CylinderGeometry(0.04, 0.03, 0.8, 6);
+    const leg = new THREE.Mesh(legGeo, darkMat);
+    leg.position.set(side * 0.65, yPos, 0);
+    leg.rotation.z = side * angle;
+    return leg;
+  }
+  for (let i = 0; i < 3; i++) {
+    lobsterGroup.add(makeLeg(-1, 0.3 - i * 0.5, 0.7 + i * 0.1));
+    lobsterGroup.add(makeLeg(1, 0.3 - i * 0.5, 0.7 + i * 0.1));
+  }
+
+  function makeAntenna(side) {
+    const curve = new THREE.QuadraticBezierCurve3(
+      new THREE.Vector3(side * 0.3, 2.0, 0.3),
+      new THREE.Vector3(side * 1.0, 3.0, 0.3),
+      new THREE.Vector3(side * 1.8, 3.5, 0)
+    );
+    const tubeGeo = new THREE.TubeGeometry(curve, 20, 0.03, 8, false);
+    return new THREE.Mesh(tubeGeo, bodyMat);
+  }
+  lobsterGroup.add(makeAntenna(-1));
+  lobsterGroup.add(makeAntenna(1));
+
+  lobsterGroup.position.y = -0.3;
+  scene.add(lobsterGroup);
+
+  let mouseX = 0;
+  container.addEventListener('mousemove', (e) => {
+    const rect = container.getBoundingClientRect();
+    mouseX = ((e.clientX - rect.left) / rect.width - 0.5) * 2;
+  });
+
+  function animate() {
+    requestAnimationFrame(animate);
+    const t = Date.now() * 0.001;
+
+    lobsterGroup.rotation.y += (mouseX * 0.5 - lobsterGroup.rotation.y) * 0.05;
+    lobsterGroup.position.y = -0.3 + Math.sin(t * 1.5) * 0.15;
+
+    leftClaw.rotation.z = Math.sin(t * 2) * 0.15;
+    rightClaw.rotation.z = Math.sin(t * 2 + 1) * -0.15;
+
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  window.addEventListener('resize', () => {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+  });
+})();
+</script>
+
+</body>
+</html>
