@@ -1,49 +1,61 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-APP_DIR="/opt/dex-quant-server"
-REPO_URL="https://github.com/miyaosk/dex-quant-server.git"
+APP_DIR="${APP_DIR:-/opt/dex-quant-server}"
+SERVICE_NAME="${SERVICE_NAME:-dex-quant}"
+PORT="${PORT:-8000}"
+WORKERS="${WORKERS:-2}"
+REPO_URL="${REPO_URL:-}"
 
 echo "=== 1. 安装基础依赖 ==="
-if command -v apt-get &> /dev/null; then
-    sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv git curl
-elif command -v yum &> /dev/null; then
-    sudo yum install -y python3 python3-pip git curl
-fi
-
-echo "=== 2. 克隆/更新项目 ==="
-if [ -d "$APP_DIR" ]; then
-    cd "$APP_DIR"
-    git pull origin master
+if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y python3 python3-pip python3-venv git curl
+elif command -v yum >/dev/null 2>&1; then
+    sudo yum install -y python3 python3-pip python3-venv git curl
 else
-    sudo git clone "$REPO_URL" "$APP_DIR"
-    sudo chown -R $(whoami):$(whoami) "$APP_DIR"
-    cd "$APP_DIR"
+    echo "不支持的包管理器，请手动安装 python3 / pip / venv / git / curl"
+    exit 1
 fi
 
-echo "=== 3. 创建虚拟环境 & 安装依赖 ==="
+echo "=== 2. 准备项目目录 ==="
+if [ -n "$REPO_URL" ]; then
+    if [ -d "$APP_DIR/.git" ]; then
+        git -C "$APP_DIR" pull --ff-only
+    else
+        sudo mkdir -p "$(dirname "$APP_DIR")"
+        sudo git clone "$REPO_URL" "$APP_DIR"
+        sudo chown -R "$(whoami)":"$(whoami)" "$APP_DIR"
+    fi
+else
+    if [ ! -d "$APP_DIR" ]; then
+        echo "APP_DIR 不存在: $APP_DIR"
+        echo "请先把项目上传到服务器，或通过 REPO_URL 指定仓库地址。"
+        exit 1
+    fi
+fi
+
+cd "$APP_DIR"
+
+echo "=== 3. 创建虚拟环境并安装依赖 ==="
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 
-echo "=== 4. 配置环境变量 ==="
+echo "=== 4. 初始化环境文件 ==="
 if [ ! -f .env ]; then
-    cat > .env << 'ENVEOF'
-MYSQL_HOST=your-mysql-host
-MYSQL_PORT=3306
-MYSQL_USER=root
-MYSQL_PASSWORD=your-password-here
-MYSQL_DB=dex_quant
-ENVEOF
-    echo "⚠️  .env 文件已创建，请编辑 .env 填入真实的数据库密码！"
-    echo "    vi $APP_DIR/.env"
-else
-    echo ".env 文件已存在，跳过"
+    if [ -f .env.example ]; then
+        cp .env.example .env
+        echo "已从 .env.example 生成 .env，请先填好真实配置后再重跑 deploy.sh。"
+    else
+        echo ".env.example 不存在，请手动创建 .env。"
+    fi
+    exit 1
 fi
 
-echo "=== 5. 创建 systemd 服务 ==="
-sudo tee /etc/systemd/system/dex-quant.service > /dev/null << SVCEOF
+echo "=== 5. 安装 systemd 服务 ==="
+sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" >/dev/null <<EOF
 [Unit]
 Description=DEX Quant Server
 After=network.target
@@ -53,21 +65,20 @@ Type=simple
 User=$(whoami)
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$APP_DIR/.env
-ExecStart=$APP_DIR/venv/bin/gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w 2 --timeout 600 -b 0.0.0.0:8000 --keep-alive 10 --max-requests-jitter 100
+ExecStart=$APP_DIR/venv/bin/gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${WORKERS} --timeout 600 -b 0.0.0.0:${PORT} --keep-alive 10 --max-requests-jitter 100
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-SVCEOF
+EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable dex-quant
-sudo systemctl restart dex-quant
+sudo systemctl enable "${SERVICE_NAME}"
+sudo systemctl restart "${SERVICE_NAME}"
 
 echo "=== 部署完成 ==="
-echo "服务状态:"
-sudo systemctl status dex-quant --no-pager
+sudo systemctl --no-pager --full status "${SERVICE_NAME}" || true
 echo ""
-echo "访问地址: http://$(hostname -I | awk '{print $1}'):8000"
-echo "查看日志: sudo journalctl -u dex-quant -f"
+echo "服务监听端口: ${PORT}"
+echo "日志查看命令: sudo journalctl -u ${SERVICE_NAME} -f"

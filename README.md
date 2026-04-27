@@ -34,6 +34,48 @@ uvicorn app.main:app --reload
 
 服务启动后访问 http://localhost:8000/docs 查看交互式 API 文档。
 
+## 阿里云 ECS 部署建议
+
+推荐部署形态：
+
+- `dex-quant-server` 部署在阿里云 ECS
+- MySQL 使用阿里云 RDS MySQL，或先在同机自建 MySQL
+- Nginx 反向代理到 `127.0.0.1:8000`
+- 域名通过 HTTPS 暴露，例如 `https://quant.example.com`
+- `dex-skill` 侧通过环境变量 `DEX_QUANT_SERVER_URL=https://quant.example.com` 指向新后端
+
+最小上线步骤：
+
+```bash
+# 1. 上传代码到 ECS，例如 /opt/dex-quant-server
+cp .env.example .env
+
+# 2. 编辑环境变量
+vim .env
+
+# 3. 启动服务
+bash deploy.sh
+```
+
+Nginx 示例：
+
+```nginx
+server {
+    listen 80;
+    server_name quant.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+}
+```
+
+建议再用 Certbot 或阿里云证书把 80 升级到 HTTPS。
+
 ## Docker 运行
 
 ```bash
@@ -62,6 +104,7 @@ docker run -p 8000:8000 \
 | `DB_POOL_SIZE` | `1` | 连接池大小 |
 | `PROXY_URL` | *(空)* | HTTP 代理地址，用于访问 Binance API |
 | `API_PREFIX` | `/api/v1` | API 路由前缀 |
+| `PUBLIC_BASE_URL` | *(空)* | 对外访问的 HTTPS 域名，用于生成 Vault 安全链接等绝对地址 |
 | `DEFAULT_FEE_RATE` | `0.0005` | 默认手续费率 |
 | `DEFAULT_SLIPPAGE_BPS` | `2.0` | 默认滑点（基点） |
 | `MAX_BACKTEST_BARS` | `500000` | 单次回测最大 K 线数 |
@@ -84,6 +127,16 @@ export SANDBOX_MODE=docker
 ```
 
 安全措施：`--network=none` 断网 / `--memory=512m` / `--cpus=1` / `--read-only` / `--user=65534` 非root / `--cap-drop=ALL`
+
+## skill 端切换到阿里云后端
+
+`dex-skill` 现在支持通过环境变量切换服务地址：
+
+```bash
+export DEX_QUANT_SERVER_URL=https://quant.example.com
+```
+
+如果你是用长期运行环境，建议把它写进 shell profile、Bot 进程环境变量，或 skill 运行容器的启动配置中。
 
 ## 架构关系
 

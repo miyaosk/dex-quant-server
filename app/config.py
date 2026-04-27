@@ -41,6 +41,7 @@ DEFAULT_FEE_RATE: float = float(os.getenv("DEFAULT_FEE_RATE", "0.0005"))
 DEFAULT_SLIPPAGE_BPS: float = float(os.getenv("DEFAULT_SLIPPAGE_BPS", "2.0"))
 MAX_BACKTEST_BARS: int = int(os.getenv("MAX_BACKTEST_BARS", "500000"))
 API_PREFIX: str = os.getenv("API_PREFIX", "/api/v1")
+PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
 # docker  = Docker 容器隔离（断网 + 内存限 + 非root），默认推荐
 # process = 进程内沙箱（AST 扫描 + 受限 builtins），用于无 Docker 环境（如 Railway PaaS）

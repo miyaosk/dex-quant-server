@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
 from pydantic import BaseModel
 
-from app import database
+from app import config, database
 from app.routers.auth import validate_token
 
 router = APIRouter(prefix="/vault", tags=["vault"])
@@ -83,9 +83,7 @@ async def create_setup_link(request: Request, record: dict = Header(None)):
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=SETUP_LINK_TTL_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
     await database.create_vault_token(token, machine_code, expires_at)
 
-    base_url = str(request.base_url).rstrip("/")
-    if base_url.startswith("http://") and ".up.railway.app" in base_url:
-        base_url = base_url.replace("http://", "https://", 1)
+    base_url = config.PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
     url = f"{base_url}/api/v1/vault/page?token={token}"
 
     logger.info(f"Vault setup link created | machine={machine_code[:8]}... | expires={expires_at}")
