@@ -13,6 +13,15 @@ import json
 from typing import Optional
 
 
+def _optional_env(name: str) -> Optional[str]:
+    """读取可选环境变量；空字符串视为未配置。"""
+    value = os.getenv(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
 def _load_mysql_config() -> dict:
     """优先读独立环境变量，兼容旧 JSON 格式的 mysql_db。"""
     raw = os.getenv("mysql_db", "")
@@ -36,7 +45,7 @@ def _load_mysql_config() -> dict:
 
 mysql_db = _load_mysql_config()
 
-PROXY_URL: Optional[str] = os.getenv("PROXY_URL")
+PROXY_URL: Optional[str] = _optional_env("PROXY_URL")
 DEFAULT_FEE_RATE: float = float(os.getenv("DEFAULT_FEE_RATE", "0.0005"))
 DEFAULT_SLIPPAGE_BPS: float = float(os.getenv("DEFAULT_SLIPPAGE_BPS", "2.0"))
 MAX_BACKTEST_BARS: int = int(os.getenv("MAX_BACKTEST_BARS", "500000"))

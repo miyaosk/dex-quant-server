@@ -12,6 +12,7 @@
 国内访问 Binance 可通过 Settings.PROXY_URL 或环境变量配置代理。
 """
 
+import os
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -69,12 +70,23 @@ class DataClient:
 
         proxy 优先级: 显式参数 > 环境变量 PROXY_URL
         """
-        import os
-        proxy_url = proxy or os.environ.get("PROXY_URL")
+        proxy_url = self._normalize_proxy(proxy)
         self._client = httpx.Client(
             timeout=30.0,
             proxy=proxy_url,
+            trust_env=False,
         )
+
+    @staticmethod
+    def _normalize_proxy(proxy: Optional[str]) -> Optional[str]:
+        """空字符串代理视为未配置。"""
+        candidate = proxy
+        if candidate is None:
+            candidate = os.environ.get("PROXY_URL")
+        if candidate is None:
+            return None
+        candidate = candidate.strip()
+        return candidate or None
 
     def _get(self, url: str, params: dict = None) -> dict | list:
         """带 429 限流重试的 GET 请求。"""
